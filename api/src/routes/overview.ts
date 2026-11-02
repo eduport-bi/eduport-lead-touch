@@ -26,9 +26,10 @@ export const FLAT_COLS: Partial<Record<(typeof LIST_KEYS)[number], string>> = {
 
 /** "Converted" for the current filters: workbook rule (any valid payment on/after the touch day), or - when the
  *  payment-date window is switched on - a valid payment dated inside that window and on/after the touch day. */
-// "Revised to New" (KPI, replaced the two revised funnels on 2026-10-31): a lead touched again with no decision since is New again. The
-// decision moments (Lead Stage: mv_lead_decision.lm_since, Interested Course status: mv_ic_decision.ic_since, sql/045, field-history based)
-// are compared with the lead's last touch IN THE SELECTION, so the filters decide which touch counts (a campaign filter = that campaign's touch).
+// "Yet to connect (New)" (card, replaced the two revised funnels on 2026-10-31): a lead touched with no contact since is yet to connect, whatever
+// its stage (Converted included since 2026-11-02: a lead that bought, was touched again and nobody contacted is yet to connect too). Contact = a call Task (salesforce.lead_calls.call_days, the Turnaround card's activity) OR a Lead Stage change
+// OR an Interested Course status change (mv_lead_decision.lm_since / mv_ic_decision.ic_since, sql/045) on/after the lead's FIRST touch IN THE
+// SELECTION (filters decide: campaign filter = that campaign's touch).
 
 export function convCond(sql: Sql, f: Filters): Frag {
   const pp = paymentPeriod(f);
@@ -255,17 +256,20 @@ overview.get('/overview', (c) =>
         SELECT count(*)::int AS new_leads,
                count(*) FILTER (WHERE EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id))::int AS new_leads_touched
         FROM analytics.mv_lead_lite l WHERE ${newLeadWhere(sql, f, periods.current)}`,   // narrow materialized copy (sql/035): the count scans a fraction of the lead table
-      // Yet to connect: leads of the selection (not Converted) with no decision after their LAST TOUCH IN THE SELECTION (with a campaign
-      // selected: the last touch of that campaign). A decision = a Lead Stage change or an Interested Course status change later than that
-      // touch; for a lead still in New only the IC status counts (New is not a decision). Leads in New are "already New", the others are
-      // "revised to New". One row per current stage (the web splits New / other stages).
+      // Yet to connect: leads of the selection (every stage, Converted included) with NO contact on or after their FIRST TOUCH IN THE SELECTION: no call Task
+      // (the Turnaround card's "activity", salesforce.lead_calls.call_days) AND no Lead Stage change AND no Interested Course status change
+      // from that day on (a status is only changed after a call, so a change counts as contact even without a Task). "New" is never a
+      // decision, on the lead or on a course: a new Interested Course created in status New after the touch is not contact. For Converted
+      // leads only calls count: the stage Converted and the course statuses Enrolled / Already Enrolled are set by the payment, not by a
+      // call. With a campaign selected the touch is that campaign's.
+      // Leads in New are "already New", Converted leads their own split, the others "revised to New" (parked in a stage, touched again, nobody contacted them).
       sql<{ stage: string; leads: number; revised: number }[]>`
-        WITH r AS (SELECT t.lead_id, max(t.lead_stage) AS stage, max(t.touch_at) AS ref FROM analytics.mv_touch_flat t WHERE ${w} GROUP BY t.lead_id)
-        SELECT COALESCE(r.stage, '(blank)') AS stage, count(*)::int AS leads,
-               count(*) FILTER (WHERE (r.stage = 'New' OR NOT COALESCE(d.lm_since > r.ref, false))
-                                  AND NOT EXISTS (SELECT 1 FROM analytics.mv_ic_decision i WHERE i.lead_id = r.lead_id AND i.ic_since > r.ref))::int AS revised
-        FROM r LEFT JOIN analytics.mv_lead_decision d ON d.lead_id = r.lead_id
-        WHERE r.stage IS DISTINCT FROM 'Converted'
+        WITH x AS (SELECT t.lead_id, max(t.lead_stage) AS stage, min(t.touch_date) AS first_touch FROM analytics.mv_touch_flat t WHERE ${w} GROUP BY t.lead_id)
+        SELECT COALESCE(x.stage, '(blank)') AS stage, count(*)::int AS leads,
+               count(*) FILTER (WHERE ${activityDays(sql, sql`x.first_touch`)} IS NULL
+                                  AND (x.stage IN ('New', 'Converted') OR NOT COALESCE(d.lm_since >= (x.first_touch::timestamp AT TIME ZONE 'Asia/Kolkata'), false))
+                                  AND (x.stage = 'Converted' OR NOT EXISTS (SELECT 1 FROM analytics.mv_ic_decision i WHERE i.lead_id = x.lead_id AND i.status <> 'New' AND i.ic_since >= (x.first_touch::timestamp AT TIME ZONE 'Asia/Kolkata'))))::int AS revised
+        FROM x LEFT JOIN salesforce.lead_calls lc ON lc.lead_id = x.lead_id LEFT JOIN analytics.mv_lead_decision d ON d.lead_id = x.lead_id
         GROUP BY 1 ORDER BY revised DESC, leads DESC`,
       // Turnaround time of the converted leads in the selection: lead created -> first valid payment day, and latest touch on/before that day -> payment day
       sql<{ kind: string; key: string; leads: number; avg_days: number | null; median_days: number | null }[]>`
@@ -388,7 +392,8 @@ overview.get('/overview', (c) =>
         new_leads: newLeads?.new_leads ?? 0, new_leads_touched: newLeads?.new_leads_touched ?? 0,
         yet_new: revisedNew.reduce((a, r) => a + r.revised, 0),
         yet_new_already: revisedNew.filter((r) => r.stage === 'New').reduce((a, r) => a + r.revised, 0),
-        yet_new_revised: revisedNew.filter((r) => r.stage !== 'New').reduce((a, r) => a + r.revised, 0),
+        yet_new_revised: revisedNew.filter((r) => r.stage !== 'New' && r.stage !== 'Converted').reduce((a, r) => a + r.revised, 0),
+        yet_new_converted: revisedNew.filter((r) => r.stage === 'Converted').reduce((a, r) => a + r.revised, 0),
         yet_new_by: revisedNew,
         ...(fees ?? { fee_payers: 0, fee_payments: 0, fee_received: 0, proposed_fee: 0, fee_enrollments: 0, fee_enrollments_unknown: 0 }), fee_window: feeWin,
       },
@@ -410,7 +415,7 @@ overview.get('/overview', (c) =>
         leads_basis: f.basis === 'created' ? 'Main window = LEAD CREATED date: Total leads = only the leads created in the range (touched or not); the cards use all touches of those leads, any date.' : 'Main window = TOUCH date: Total leads = leads created in the range plus leads with a touch dated in the range; the cards use the touches dated in the range.',
         converted_first: 'Leads of the selection (created or touched in the range, per the basis) whose FIRST valid payment (app or Ujra, matched by phone or alternative number) is on/after one of their touches and not before the window start (the payment window start when the Payment date filter is on). A lead that had already paid before the window is in "Converted before the window" instead.',
         sf_converted: 'Touched leads with Salesforce Lead_Master__c.Is_Converted__c = true (reference).',
-        yet_new: 'Leads of the selection still to be connected: leads whose Lead Stage is New plus leads in any other stage except Converted that got NO decision after their last touch in the selection - no Lead Stage change and no Interested Course status change later than that touch (for a lead in New only the course status counts). "Already New" = in stage New; "revised to New" = parked in another stage, touched again, nobody acted since. "Last touch in the selection" follows the filters: with a campaign selected it is the lead\'s last touch of that campaign, so a lead contacted after campaign A but only touched by campaign B counts as decided under A and as revised to New under B. Stage and status moments come from the Salesforce field-history log (from 1 March 2026); without a logged change, the creation date or 1 March 2026 if older. Click the value or a split for the leads.',
+        yet_new: 'Leads of the selection nobody has contacted since their touch: no call Task logged, no Lead Stage change and no Interested Course status change on or after their first touch in the selection, any later date; Converted leads included (bought earlier, touched again in the selection, nobody contacted them since). A call Task is the Turnaround card\'s "activity"; a stage or status change counts as contact too, because a status is only changed after a call. "New" is never a decision: a new Interested Course created in status New after the touch is not contact. For Converted leads only calls count, because the stage Converted and the course statuses Enrolled / Already Enrolled are set by the payment. "Already New" = Lead Stage is New; "revised to New" = parked in another stage (Connected, Not Willing Now, ...), touched again, nobody contacted them since; "Converted" = Lead Stage is Converted and no call was logged after the lead\'s touch in the selection. The touch follows the filters: with a campaign selected it is the lead\'s first touch of that campaign, so a lead contacted after campaign A but only touched by campaign B counts as contacted under A and as yet to connect under B. Stage and status moments come from the Salesforce field-history log (from 1 March 2026); without a logged change, the creation date or 1 March 2026 if older. Click the value, a split or a bar for the leads.',
         stage_react: 'Leads in the selection whose current stage is Not Willing Now, Disqualified, Not Connected or P2 Completed AND that received at least one lead touch AFTER entering that stage. The stage moment comes from the Salesforce field-history log (latest change into the current stage); leads with no logged change since 1 March 2026 use their creation date, or 1 March 2026 if older.',
         stage_conv_unpaid: 'Leads whose Salesforce Lead Stage is "Converted" but with NO valid payment on their phone (any date): marked converted without a purchase.',
         paid_other_stage: 'Leads counted in Total converted (valid payment on/after a touch, inside the payment window when it is on) whose Lead Stage is NOT "Converted": paid, but the stage was never updated.',

@@ -124,14 +124,16 @@ function metricHaving(sql: Sql, metric: Metric, p: Period, f?: Filters, q: Recor
     case 'stage_react': return sql`max(t.lead_stage) IN ('Not Willing Now', 'Disqualified', 'Not Connected', 'P2 Completed')
         AND (SELECT x.last_touch_at FROM analytics.mv_lead_last_touch x WHERE x.lead_id = t.lead_id) > analytics.stage_since(t.lead_id, max(t.lead_stage), max(t.lead_created_date)::timestamptz)`;
     case 'paid_other_stage': return sql`bool_or(${conv}) AND max(t.lead_stage) IS DISTINCT FROM 'Converted'`;
-    // Yet to connect (the Overview "yet_new" KPI): not Converted, no IC status change after the lead's last touch in the selection, and either
-    // still in New (scope=new) or in another stage with no Lead Stage change after that touch (scope=revised); no scope = both
+    // Yet to connect (the Overview "yet_new" card): no contact on/after the lead's first touch in the selection: no call Task (call_days),
+    // no Lead Stage change (New excepted), no IC status change (a course in status New excepted; Converted leads: calls only);
+    // scope=new = still in New, scope=converted = Converted, scope=revised = any other stage
     case 'revised_new': {
-      const scope = q.scope === 'new' ? sql`max(t.lead_stage) = 'New'`
-        : q.scope === 'revised' ? sql`max(t.lead_stage) IS DISTINCT FROM 'New' AND NOT COALESCE((SELECT d.lm_since FROM analytics.mv_lead_decision d WHERE d.lead_id = t.lead_id) > max(t.touch_at), false)`
-        : sql`(max(t.lead_stage) = 'New' OR NOT COALESCE((SELECT d.lm_since FROM analytics.mv_lead_decision d WHERE d.lead_id = t.lead_id) > max(t.touch_at), false))`;
-      return sql`max(t.lead_stage) IS DISTINCT FROM 'Converted' AND ${scope}
-        AND NOT EXISTS (SELECT 1 FROM analytics.mv_ic_decision i WHERE i.lead_id = t.lead_id AND i.ic_since > max(t.touch_at))`;
+      const scope = q.scope === 'new' ? sql`max(t.lead_stage) = 'New'` : q.scope === 'converted' ? sql`max(t.lead_stage) = 'Converted'`
+        : q.scope === 'revised' ? sql`max(t.lead_stage) IS DISTINCT FROM 'New' AND max(t.lead_stage) IS DISTINCT FROM 'Converted'` : sql`true`;
+      return sql`${scope}
+        AND NOT EXISTS (SELECT 1 FROM salesforce.lead_calls lc, unnest(lc.call_days) AS d WHERE lc.lead_id = t.lead_id AND d >= min(t.touch_date))
+        AND (max(t.lead_stage) IN ('New', 'Converted') OR NOT COALESCE((SELECT d.lm_since FROM analytics.mv_lead_decision d WHERE d.lead_id = t.lead_id) >= (min(t.touch_date)::timestamp AT TIME ZONE 'Asia/Kolkata'), false))
+        AND (max(t.lead_stage) = 'Converted' OR NOT EXISTS (SELECT 1 FROM analytics.mv_ic_decision i WHERE i.lead_id = t.lead_id AND i.status <> 'New' AND i.ic_since >= (min(t.touch_date)::timestamp AT TIME ZONE 'Asia/Kolkata')))`;
     }
     case 'avg_alltime': case 'avg_window': return sql`bool_or(t.converted)`;
     case 'fee_paid': return sql`true`;   // the payment condition is part of the row selection (feeLeads)

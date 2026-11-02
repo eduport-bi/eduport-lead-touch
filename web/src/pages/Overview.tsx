@@ -23,7 +23,7 @@ interface OverviewResponse {
     stale_nc: number; stale_nc_untouched: number; nc_total: number;
     stage_react: number; stage_react_total: number; stage_react_by: { stage: string; total: number; reactivated: number }[];
     new_leads: number; new_leads_touched: number;
-    yet_new: number; yet_new_already: number; yet_new_revised: number; yet_new_by: { stage: string; leads: number; revised: number }[];
+    yet_new: number; yet_new_already: number; yet_new_revised: number; yet_new_converted: number; yet_new_by: { stage: string; leads: number; revised: number }[];
     proposed_fee: number; fee_received: number; fee_payers: number; fee_payments: number; fee_enrollments: number; fee_enrollments_unknown: number; fee_window: { from: string; to: string };
   };
   stages: { key: string; leads: number; converted: number }[];
@@ -158,21 +158,23 @@ export default function Overview() {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-3">
-        <ChartCard title="Yet to connect (New)" tone="tone-violet" subtitle="leads in New plus leads parked in another stage with no Lead Stage or IC status decision after their last touch in the selection · click a bar for the leads"
+        <ChartCard title="Yet to connect (New)" tone="tone-violet" subtitle="leads with no call, stage change or IC status change on or after their touch in the selection: in New, parked in another stage, or already Converted and touched again · click a bar for the leads"
           loading={q.isLoading} error={q.error} rows={k?.yet_new_by ?? []} height={240} help={def.yet_new}>
           {k && (
             <div className="flex h-full flex-col">
               <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
                 <button className="text-3xl font-extrabold tracking-tight hover:text-accent" title="click for the leads"
-                  onClick={() => open('revised_new', 'Yet to connect (New)', undefined, undefined, 'leads in stage New, plus leads in another stage with no Lead Stage or IC status decision after their last touch in the selection')}>{fmtInt(k.yet_new)}</button>
-                <button className="rounded px-1 text-xs text-ink-3 hover:bg-tone hover:text-ink" title="Lead Stage is New, no IC status decision after the last touch in the selection · click for the leads"
-                  onClick={() => setDrill({ metric: 'revised_new', title: 'Yet to connect · already New', summary: true, extra: { scope: 'new' }, subtitle: 'leads in stage New with no IC status decision after their last touch in the selection' })}>already New <b className="text-ink">{fmtInt(k.yet_new_already)}</b></button>
-                <button className="rounded px-1 text-xs text-ink-3 hover:bg-tone hover:text-ink" title="parked in another stage, touched again, no Lead Stage or IC status decision since · click for the leads"
-                  onClick={() => setDrill({ metric: 'revised_new', title: 'Yet to connect · revised to New', summary: true, extra: { scope: 'revised' }, subtitle: 'leads in a stage other than New / Converted with no Lead Stage or IC status decision after their last touch in the selection' })}>revised to New <b className="text-ink">{fmtInt(k.yet_new_revised)}</b></button>
+                  onClick={() => open('revised_new', 'Yet to connect (New)', undefined, undefined, 'leads with no call Task, Lead Stage change or IC status change on or after their first touch in the selection')}>{fmtInt(k.yet_new)}</button>
+                <button className="rounded px-1 text-xs text-ink-3 hover:bg-tone hover:text-ink" title="Lead Stage is New, no call Task and no IC status change after the touch · click for the leads"
+                  onClick={() => setDrill({ metric: 'revised_new', title: 'Yet to connect · already New', summary: true, extra: { scope: 'new' }, subtitle: 'leads in stage New with no call Task and no IC status change on or after their first touch in the selection' })}>already New <b className="text-ink">{fmtInt(k.yet_new_already)}</b></button>
+                <button className="rounded px-1 text-xs text-ink-3 hover:bg-tone hover:text-ink" title="parked in another stage, touched again, no call, stage change or IC status change since · click for the leads"
+                  onClick={() => setDrill({ metric: 'revised_new', title: 'Yet to connect · revised to New', summary: true, extra: { scope: 'revised' }, subtitle: 'leads in a stage other than New / Converted with no call Task, Lead Stage change or IC status change on or after their first touch in the selection' })}>revised to New <b className="text-ink">{fmtInt(k.yet_new_revised)}</b></button>
+                <button className="rounded px-1 text-xs text-ink-3 hover:bg-tone hover:text-ink" title="Lead Stage is Converted, touched in the selection, no call logged since · click for the leads"
+                  onClick={() => setDrill({ metric: 'revised_new', title: 'Yet to connect · Converted', summary: true, extra: { scope: 'converted' }, subtitle: 'leads in stage Converted with no call Task on or after their first touch in the selection' })}>Converted <b className="text-ink">{fmtInt(k.yet_new_converted)}</b></button>
               </div>
               <div className="mt-2 min-h-0 flex-1">
                 <HBars colorful data={k.yet_new_by.filter((r) => r.revised > 0).map((r) => ({ key: r.stage, value: r.revised, secondary: r.leads }))} valueLabel="Yet to connect" secondaryLabel="Leads in the stage" secondaryFormat={fmtInt}
-                  onClick={(key) => open('revised_new', `Yet to connect · ${key}`, 'lead_stage', key, key === 'New' ? 'leads in stage New with no IC status decision after their last touch in the selection' : `leads parked in ${key} with no Lead Stage or IC status decision after their last touch in the selection`)} />
+                  onClick={(key) => open('revised_new', `Yet to connect · ${key}`, 'lead_stage', key, key === 'New' ? 'leads in stage New with no call Task and no IC status change on or after their first touch in the selection' : key === 'Converted' ? 'leads in stage Converted with no call Task on or after their first touch in the selection' : `leads parked in ${key} with no call Task, Lead Stage change or IC status change on or after their first touch in the selection`)} />
               </div>
             </div>
           )}
