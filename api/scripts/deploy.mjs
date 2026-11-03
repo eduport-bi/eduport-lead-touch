@@ -12,7 +12,7 @@ if (r.status) process.exit(r.status);
 
 // A deploy empties the response cache (BUILD_ID is part of every key): warm the default views now instead of waiting for the next cron
 // run, so the first visitor after a deploy gets cached answers. The secret lives in api/.dev.vars (git-ignored) or WARM_SECRET.
-const site = process.env.SITE_URL ?? 'https://eduport-lead-touch.vishnudasp-eduport.workers.dev';
+const site = process.env.SITE_URL ?? 'https://leads.eduportbi.workers.dev';
 let secret = process.env.WARM_SECRET;
 if (!secret) { try { secret = /^WARM_SECRET=(.+)$/m.exec(readFileSync(new URL('../.dev.vars', import.meta.url), 'utf8'))?.[1]?.trim(); } catch { /* no file */ } }
 if (!secret) { console.log('warm: WARM_SECRET not set, the cache warms on the next cron run (within 10 min)'); process.exit(0); }
