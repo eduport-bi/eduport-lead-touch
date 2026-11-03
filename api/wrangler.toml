@@ -6,6 +6,19 @@ main = "src/index.ts"
 compatibility_date = "2026-06-01"
 compatibility_flags = ["nodejs_compat"]
 
+# --- Custom domain (planned 2026-11-03): leads.eduport.ai -----------------------------------------------------------------
+# eduport.ai is already on Cloudflare (nameservers dina/brodie.ns.cloudflare.com) but in ANOTHER Cloudflare account; a Worker custom
+# domain must live in the account that holds the zone. Steps, in order:
+#   1. The owner of that Cloudflare account invites vishnudasp.eduport@gmail.com as a member (Administrator, or Workers Admin + DNS).
+#   2. Set account_id below to that account (npx wrangler whoami lists it), create the KV namespace and the Hyperdrive config there
+#      (npx wrangler kv namespace create CACHE; npx wrangler hyperdrive create eduport-lead-touch --connection-string "<Supabase string>")
+#      and paste the two new ids into [[kv_namespaces]] / [[hyperdrive]]; re-enter the Worker secrets (GITHUB_TOKEN, SMTP_USER, SMTP_PASS,
+#      WARM_SECRET) with npx wrangler secret put.
+#   3. Uncomment the route below and deploy: wrangler creates the DNS record and the certificate itself.
+#   4. Point the warm-up URLs at the new host (api/scripts/deploy.mjs SITE_URL default, .github/workflows/sync.yml), tell the users,
+#      then delete the old Worker in the personal account (npx wrangler delete --name eduport-lead-touch).
+# routes = [{ pattern = "leads.eduport.ai", custom_domain = true }]
+
 [observability]
 enabled = true
 
