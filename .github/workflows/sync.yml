@@ -73,4 +73,4 @@ jobs:
         # a sync changes the data version, which empties the response cache: fill the default views before anyone opens the page
         if: inputs.sql == '' && env.WARM_SECRET != ''
         run: |
-          curl -sS -m 600 -o /dev/null -w "warm HTTP %{http_code} in %{time_total}s\n" -X POST -H "x-warm-secret: $WARM_SECRET" https://leads.eduportbi.workers.dev/api/admin/warm || true
+          curl -sS -m 600 -o /dev/null -w "warm HTTP %{http_code} in %{time_total}s\n" -X POST -H "x-warm-secret: $WARM_SECRET" https://leadtouch.eduportbi.workers.dev/api/admin/warm || true

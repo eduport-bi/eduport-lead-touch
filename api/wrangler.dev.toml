@@ -2,7 +2,7 @@
 # Keep every other setting identical to wrangler.toml.
 # Cloudflare Worker: serves /api/* and the built React app (Workers Static Assets).
 # One deploy = API + frontend:  cd web && npm run build && cd ../api && npx wrangler deploy
-name = "leads"
+name = "leadtouch"
 account_id = "ee558dc2a8ca2f421731d9b046ae5731"
 main = "src/index.ts"
 compatibility_date = "2026-06-01"

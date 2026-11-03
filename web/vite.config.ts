@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => ({
   server: {
     port: 5173,
     // `vite --mode localapi` (npm run dev:local) talks to `wrangler dev` on 8787; default = the live Worker
-    proxy: { '/api': { target: mode === 'localapi' ? (process.env.API_PROXY ?? 'http://127.0.0.1:8787') : (process.env.API_PROXY ?? 'https://leads.eduportbi.workers.dev'), changeOrigin: true } },
+    proxy: { '/api': { target: mode === 'localapi' ? (process.env.API_PROXY ?? 'http://127.0.0.1:8787') : (process.env.API_PROXY ?? 'https://leadtouch.eduportbi.workers.dev'), changeOrigin: true } },
   },
   build: {
     sourcemap: false,
