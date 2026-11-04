@@ -28,7 +28,7 @@ const VALID_ANY = (sql: Sql) => sql`hp.deleted = false AND hp.is_success = true 
  * WHERE for analytics.v_lead_lite (or v_lead_conv) AS l: leads created inside the window, honouring the filter bar.
  * Lead filters apply to the lead itself; touch filters keep leads with at least one matching touch (any date).
  */
-export function newLeadWhere(sql: Sql, f: Filters, p: Period | null, opts: { validPay?: boolean; scope?: string } = {}): Frag {
+export function newLeadWhere(sql: Sql, f: Filters, p: Period | null, opts: { validPay?: boolean; scope?: string; skip?: string } = {}): Frag {
   // IST calendar days expressed as a range on the raw timestamp, so the creation-date index is used; p = null: no date window (Lead explorer)
   // scope 'union' (Total leads on the lead-created basis): created in the window OR touched in the window
   const c: Frag[] = !p ? []
@@ -56,7 +56,7 @@ export function newLeadWhere(sql: Sql, f: Filters, p: Period | null, opts: { val
   const touch: Frag[] = [];
   for (const k of LIST_KEYS) {
     const vals = f[k];
-    if (!vals?.length) continue;
+    if (!vals?.length || k === opts.skip) continue;   // skip: the card of that dim ignores its own filter (its rows stay visible)
     if (k === 'call_reason') {
       const real = vals.filter((v) => v !== '(no call)' && v !== '(no reason recorded)' && v !== '(null)');
       const noCall = vals.includes('(no call)'); const noReason = vals.includes('(no reason recorded)') || vals.includes('(null)');

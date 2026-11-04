@@ -187,13 +187,53 @@ overview.get('/overview', (c) =>
                             AND NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id)`;
     const uAfter = pp ? sql`(u.first_pay >= u.created_date AND u.first_pay BETWEEN ${pp.from} AND ${pp.to})` : sql`(u.first_pay >= u.created_date AND u.first_pay >= ${winFrom})`;
     const uBefore = sql`(u.first_pay < ${winFrom})`;
+    // The lead-level cards (LM stage, IC status, class, LM reason, last call reason, interested course) and the two stage tiles count the
+    // never-touched leads of the selection as well, so they add up to Total leads (user rule 2026-11-04). One statement over that lead set
+    // answers every card; a card whose own dim is filtered gets its own statement without that filter (like the touch cards). The touch-level
+    // cards (touch point, source, medium, campaign, staff) cannot include them: there is no touch to classify. "Converted" for these leads =
+    // first valid payment on/after the creation day (any date); converted_first adds the window-start rule like the tile.
+    const U_DIMS = ['lead_stage', 'ic_status', 'class_raw', 'lm_reason', 'call_reason', 'ic_course'] as const;
+    const untouchedDims = (skip?: string) => sql<{ dim: string; key: string; leads: number; converted: number; converted_first: number; ics: number }[]>`
+      WITH u AS (
+        SELECT l.lead_id, l.created_date, l.lead_stage, l.class_raw, l.lm_reason,
+               CASE WHEN l.phone_valid THEN (SELECT min(vp.payment_date) FROM analytics.v_valid_payment_x vp WHERE vp.phone_key = l.phone_key) END AS first_pay
+        FROM analytics.mv_lead_lite l WHERE ${newLeadWhere(sql, f, periods.current, { skip })}
+          AND NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id)),
+      c AS (SELECT u.*, (u.first_pay >= u.created_date) AS conv, ${uAfter} AS conv_first FROM u)
+      SELECT d.dim, COALESCE(d.key, '(null)') AS key, count(DISTINCT c.lead_id)::int AS leads,
+             count(DISTINCT c.lead_id) FILTER (WHERE c.conv)::int AS converted, count(DISTINCT c.lead_id) FILTER (WHERE c.conv_first)::int AS converted_first, 0::int AS ics
+      FROM c CROSS JOIN LATERAL (VALUES ('lead_stage', c.lead_stage), ('class_raw', c.class_raw), ('lm_reason', c.lm_reason)) AS d(dim, key)
+      GROUP BY 1, 2
+      UNION ALL
+      SELECT 'call_reason', CASE WHEN lc.lead_id IS NULL THEN '(no call)' WHEN lc.last_reason IS NULL THEN '(no reason recorded)' ELSE lc.last_reason END,
+             count(DISTINCT c.lead_id)::int, count(DISTINCT c.lead_id) FILTER (WHERE c.conv)::int, count(DISTINCT c.lead_id) FILTER (WHERE c.conv_first)::int, 0
+      FROM c LEFT JOIN salesforce.lead_calls lc ON lc.lead_id = c.lead_id GROUP BY 2
+      UNION ALL
+      SELECT 'ic_status', btrim(ic.status__c), count(DISTINCT c.lead_id)::int, 0, 0, count(*)::int
+      FROM c JOIN salesforce.interested_course__c ic ON ic.lead_master__c = c.lead_id AND ic.isdeleted = false
+      WHERE NULLIF(btrim(ic.status__c), '') IS NOT NULL GROUP BY 2
+      UNION ALL
+      SELECT 'ic_course', ${icCourseExpr(sql)}, count(DISTINCT c.lead_id)::int, count(DISTINCT c.lead_id) FILTER (WHERE c.conv)::int, count(DISTINCT c.lead_id) FILTER (WHERE c.conv_first)::int, 0
+      FROM c JOIN salesforce.interested_course__c ic ON ic.lead_master__c = c.lead_id AND ic.isdeleted = false LEFT JOIN salesforce.course__c cr ON cr.id = ic.course__c
+      WHERE ${icCourseExpr(sql)} IS NOT NULL GROUP BY 2
+      UNION ALL
+      SELECT 'stage_conv', k.key, count(*)::int, 0, 0, 0
+      FROM c CROSS JOIN LATERAL (VALUES ('total', c.lead_stage = 'Converted'), ('unpaid', c.lead_stage = 'Converted' AND c.first_pay IS NULL),
+                                        ('paid_other', c.conv AND c.lead_stage IS DISTINCT FROM 'Converted')) AS k(key, hit)
+      WHERE k.hit GROUP BY 2`;
+    const uFiltered: string[] = U_DIMS.filter((d) => (f[d] as string[] | undefined)?.length);
+    const untouchedCards = Promise.all([untouchedDims(), ...uFiltered.map((d) => untouchedDims(d))]).then(([shared, ...per]) => {
+      const rows = (shared ?? []).filter((r) => r.dim === 'stage_conv' || !uFiltered.includes(r.dim));
+      uFiltered.forEach((d, i) => rows.push(...(per[i] ?? []).filter((r) => r.dim === d)));
+      return rows;
+    });
     const staleDays = Math.max(1, Math.min(365, Number.parseInt(q.stale_days ?? '5', 10) || 5));
     // cards: one grouping-sets scan for every dim without its own filter; a filtered dim keeps its separate statement (its WHERE skips that filter)
     const sharedDims = CARD_DIMS.filter((d) => !f[d]?.length);
     const cardsP = byDims(sql, w, sharedDims, conv, convFirst);
     const card = (d: CardDim) => (f[d]?.length ? byDim(sql, wx(d), d, conv, convFirst, 2000, f[d] ?? []) : cardsP.then((x) => x[d] ?? []));
-    const QN = ['kpis', 'stale', 'avg_window', 'avg_alltime', 'stages', 'ic_status', 'touch_point', 'source', 'class_raw', 'call_reason', 'medium', 'campaign', 'staff', 'daily', 'stage_react', 'lm_reason', 'new_leads', 'revised_new', 'tat', 'leads_union', 'fees', 'ic_course', 'conv_ay', 'conv_untouched'];
-    const [[k], [stale], [avgWin], [avgAll], stages, icStatus, touchPoint, source, classRaw, reason, medium, campaign, staff, daily, reactRows, lmReason, [newLeads], revisedNew, tatRows, [leadsUnion], [fees], icCourse, convAy, [convU]] = await timedAll(QN, [
+    const QN = ['kpis', 'stale', 'avg_window', 'avg_alltime', 'stages', 'ic_status', 'touch_point', 'source', 'class_raw', 'call_reason', 'medium', 'campaign', 'staff', 'daily', 'stage_react', 'lm_reason', 'new_leads', 'revised_new', 'tat', 'leads_union', 'fees', 'ic_course', 'conv_ay', 'conv_untouched', 'untouched_dims'];
+    const [[k], [stale], [avgWin], [avgAll], stages, icStatus, touchPoint, source, classRaw, reason, medium, campaign, staff, daily, reactRows, lmReason, [newLeads], revisedNew, tatRows, [leadsUnion], [fees], icCourse, convAy, [convU], uRows] = await timedAll(QN, [
       sql<{ touches: number; leads: number; converted: number; converted_first: number; converted_before: number; sf_converted: number; stage_conv_total: number; stage_conv_unpaid: number; paid_other_stage: number; touches_of_converted: number }[]>`
         SELECT count(*)::int AS touches,
                count(DISTINCT t.lead_id)::int AS leads,
@@ -370,9 +410,32 @@ overview.get('/overview', (c) =>
         ORDER BY 1, 2 DESC`,
       // the never-touched leads of the selection that count as converted (after) / already customers (before), see `untouched` above
       sql<{ after: number; before: number }[]>`SELECT count(*) FILTER (WHERE ${uAfter})::int AS after, count(*) FILTER (WHERE ${uBefore})::int AS before FROM (${untouched}) u`,
+      untouchedCards,
     ]);
     const tatShape = (kind: 'created' | 'touch' | 'activity') => shapeTat(tatRows, kind);
     // Total leads: lead-created basis = leads created in the window (touched or not); touch-date basis = created in the window OR touched in it
+    // fold the never-touched leads into the lead-level cards: keys matched as text, a value only they have becomes a new row
+    type URow = { key: string; leads: number; converted: number; converted_first: number; ics: number };
+    const uBy = (dim: string): URow[] => uRows.filter((r) => r.dim === dim);
+    const keyOf = (k: unknown) => (k === null || k === undefined ? '(null)' : String(k));
+    const fold = <R extends { key: string }>(rows: R[], dim: string, add: (r: R | undefined, u: URow) => R): R[] => {
+      const out = rows.map((r) => ({ ...r }));
+      for (const u of uBy(dim)) {
+        const i = out.findIndex((r) => keyOf(r.key) === u.key);
+        if (i >= 0) out[i] = add(out[i]!, u); else out.push(add(undefined, u));
+      }
+      return out;
+    };
+    const foldDim = (rows: DimRow[], dim: string, sortBy: 'touches' | 'leads' = 'leads'): DimRow[] => fold(rows, dim, (r, u) => {
+      const base = r ?? { key: u.key, touches: 0, leads: 0, converted: 0, converted_first: 0 };
+      const leads = base.leads + u.leads, converted = base.converted + u.converted;
+      return { ...base, leads, converted, converted_first: base.converted_first + u.converted_first, conv_rate: pct(converted, leads) };
+    }).sort((a, b) => b[sortBy] - a[sortBy]);
+    const stagesAll = fold(stages, 'lead_stage', (r, u) => ({ key: r?.key ?? u.key, leads: (r?.leads ?? 0) + u.leads, converted: (r?.converted ?? 0) + u.converted })).sort((a, b) => b.leads - a.leads);
+    const icStatusAll = fold(icStatus, 'ic_status', (r, u) => ({ key: r?.key ?? u.key, leads: (r?.leads ?? 0) + u.leads, ics: (r?.ics ?? 0) + u.ics })).sort((a, b) => b.leads - a.leads);
+    const classRawAll = foldDim(classRaw, 'class_raw', 'touches'), lmReasonAll = foldDim(lmReason, 'lm_reason', 'touches');
+    const reasonAll = foldDim(reason, 'call_reason'), icCourseAll = foldDim(icCourse, 'ic_course');
+    const uStage = (key: string) => uBy('stage_conv').find((r) => r.key === key)?.leads ?? 0;
     const leadsAll = f.basis === 'created' ? (newLeads?.new_leads ?? k.leads) : (leadsUnion?.n ?? k.leads);
     return {
       period: periods.current, payment_period: pp, basis: f.basis === 'created' ? 'created' : 'touch',
@@ -384,6 +447,7 @@ overview.get('/overview', (c) =>
         // the two conversion KPIs cover the whole Total leads population: touched leads (payment on/after a touch) + never-touched leads
         converted_first: k.converted_first + (convU?.after ?? 0), converted_before: k.converted_before + (convU?.before ?? 0),
         converted_untouched: convU?.after ?? 0, converted_before_untouched: convU?.before ?? 0,
+        stage_conv_total: k.stage_conv_total + uStage('total'), stage_conv_unpaid: k.stage_conv_unpaid + uStage('unpaid'), paid_other_stage: k.paid_other_stage + uStage('paid_other'),
         stage_react: reactRows.reduce((a, r) => a + r.reactivated, 0),
         stage_react_total: reactRows.reduce((a, r) => a + r.total, 0),
         stage_react_by: reactRows,
@@ -413,8 +477,8 @@ overview.get('/overview', (c) =>
         yet_new_by: revisedNew,
         ...(fees ?? { fee_payers: 0, fee_payments: 0, fee_received: 0, proposed_fee: 0, fee_enrollments: 0, fee_enrollments_unknown: 0 }), fee_window: feeWin,
       },
-      stages, ic_status: icStatus, ic_course: icCourse.map((r) => ({ ...r, conv_rate: pct(r.converted, r.leads) })), tat: { created: tatShape('created'), touch: tatShape('touch'), activity: tatShape('activity') },
-      touch_point: touchPoint, source, class_raw: classRaw, reason, lm_reason: lmReason, medium, campaign, staff, daily,
+      stages: stagesAll, ic_status: icStatusAll, ic_course: icCourseAll, tat: { created: tatShape('created'), touch: tatShape('touch'), activity: tatShape('activity') },
+      touch_point: touchPoint, source, class_raw: classRawAll, reason: reasonAll, lm_reason: lmReasonAll, medium, campaign, staff, daily,
       definitions: {
         leads: f.basis === 'created'
           ? 'Leads created (IST) inside the window, touched or not, PLUS older leads that received a touch dated inside the window. New leads is the created part, so it is always a subset of this figure. Deleted leads are excluded; duplicate leads are excluded unless toggled on. The rates, charts and tables below stay touch-level: they cover the leads created in the window that have a touch.'
