@@ -91,10 +91,19 @@ export function newLeadWhere(sql: Sql, f: Filters, p: Period | null, opts: { val
 }
 
 /** a value picked on the summary (dim=...&value=...) at lead grain */
-function dimCond(sql: Sql, q: Record<string, string>): Frag {
+function dimCond(sql: Sql, q: Record<string, string>, f?: Filters, p?: Period | null): Frag {
   const dim = q.dim; const value = q.value;
   if (!dim || value === undefined) return sql`true`;
   const blank = value === '(null)' || value === '(blank)';
+  if (dim === 'conv_untouched') {
+    // the never-touched part of the Overview's Total converted (value 'after') / Converted before the window ('before'): no touch on record and
+    // the first valid payment (dashboard rule) on/after the lead's creation day and not before the window start / before the window start
+    const fp = sql`(SELECT min(vp.payment_date) FROM analytics.v_valid_payment_x vp WHERE vp.phone_key = l.phone_key)`;
+    const noTouch = sql`l.phone_valid AND NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id)`;
+    const pp = f ? paymentPeriod(f) : null; const winFrom = pp?.from ?? p?.from ?? '1900-01-01';
+    if (value === 'before') return sql`(${noTouch} AND ${fp} < ${winFrom})`;
+    return pp ? sql`(${noTouch} AND ${fp} >= l.created_date AND ${fp} BETWEEN ${pp.from} AND ${pp.to})` : sql`(${noTouch} AND ${fp} >= l.created_date AND ${fp} >= ${winFrom})`;
+  }
   if (dim === 'touched') {
     const ex = sql`EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id)`;
     return value === 'Touched' ? ex : sql`NOT ${ex}`;
@@ -157,7 +166,7 @@ const COLS = [
 ];
 
 function leadQuery(sql: Sql, f: Filters, p: Period, q: Record<string, string>, page: { limit: number; offset: number } | null) {
-  const where = sql`${newLeadWhere(sql, f, p, { scope: q.scope })} AND ${dimCond(sql, q)} AND ${searchCond(sql, q.q ?? '')}`;
+  const where = sql`${newLeadWhere(sql, f, p, { scope: q.scope })} AND ${dimCond(sql, q, f, p)} AND ${searchCond(sql, q.q ?? '')}`;
   const sortCol = SORTABLE[q.sort ?? ''] ?? 'created_at';
   const dir = q.dir === 'asc' ? sql`ASC NULLS FIRST` : sql`DESC NULLS LAST`;
   const base = sql`
@@ -217,7 +226,7 @@ const SPLITS: { dim: string; label: string; kind: 'lead' | 'touch' | 'pay' }[] =
 
 newLeads.get('/overview/new_leads/summary', (c) =>
   handle(c, async ({ sql, f, periods, q }) => {
-    const where = sql`${newLeadWhere(sql, f, periods.current, { scope: q.scope })} AND ${dimCond(sql, q)} AND ${searchCond(sql, q.q ?? '')}`;
+    const where = sql`${newLeadWhere(sql, f, periods.current, { scope: q.scope })} AND ${dimCond(sql, q, f, periods.current)} AND ${searchCond(sql, q.q ?? '')}`;
     const pp = paymentPeriod(f);
     const payWin = pp ? sql`AND hp.payment_date BETWEEN ${pp.from} AND ${pp.to}` : sql``;
     const rows = await sql<{ dim: string; key: string | null; leads: number; revenue: number | null }[]>`

@@ -15,6 +15,7 @@ interface OverviewResponse {
   kpis: {
     touches: number; leads: number; leads_touched: number; converted: number; converted_first: number; sf_converted: number; stage_conv_total: number; stage_conv_unpaid: number; paid_other_stage: number; touches_of_converted: number; revenue: number;
     conv_rate: number | null; conv_rate_first: number | null; conv_rate_before: number | null; converted_before: number; window_from: string;
+    converted_untouched: number; converted_before_untouched: number;
     conv_ay: Record<'after' | 'before', { key: string; leads: number }[]>;
     touches_per_lead: number | null;
     avg_touches_alltime: number | null; avg_touches_alltime_per_lead: number | null; avg_touches_alltime_n: number;
@@ -109,6 +110,16 @@ export default function Overview() {
   };
   const openFee = (title: string) => setDrill({ metric: 'fee_paid', title, columns: FEE_COLS, summary: true,
     subtitle: `leads of the selection whose app account paid ${k?.fee_window.from ?? f.from} → ${k?.fee_window.to ?? f.to} · fee received and proposed fee per lead` });
+  // the never-touched part of Total converted / Converted before the window: created in the window, no touch on record, first valid payment
+  // on/after the creation day (after) or before the window start (before); listed from the lead table like New leads
+  const openUntouched = (kind: 'after' | 'before') => setDrill({
+    metric: 'new_leads', title: kind === 'after' ? 'Total converted · no touch' : 'Converted before the window · no touch',
+    subtitle: kind === 'after'
+      ? `leads created ${f.from} → ${f.to} with no touch on record whose first valid payment is on/after the day they were created (and not before ${k?.window_from ?? f.from})`
+      : `leads created ${f.from} → ${f.to} with no touch on record whose first valid payment is before ${k?.window_from ?? f.from}`,
+    path: '/overview/new_leads', csvPath: '/overview/new_leads.csv', summaryPath: '/overview/new_leads/summary', columns: NEW_LEAD_COLS, sortOptions: NEW_LEAD_SORTS, defaultSort: 'created_date',
+    dim: 'conv_untouched', value: kind, summary: true,
+  });
   // New leads live on the lead table (not the touch table): own list / CSV / summary endpoints
   const openNew = (touched?: 'Touched' | 'No touch yet', title = 'New leads', union = false) => setDrill({
     metric: 'new_leads', title, subtitle: union ? `leads created ${f.from} → ${f.to} (touched or not) plus older leads touched in those dates` : `Salesforce leads created ${f.from} → ${f.to}, touched or not`,
@@ -140,10 +151,10 @@ export default function Overview() {
             sub={f.basis === 'created' ? `created ${f.from} → ${f.to} · ${fmtInt(k.new_leads_touched)} touched · ${fmtInt(Math.max(0, k.new_leads - k.new_leads_touched))} not touched yet` : `${fmtInt(k.new_leads)} created in the window + ${fmtInt(Math.max(0, k.leads - k.new_leads))} older leads touched in it`}
             def={`${def.leads_basis ?? ''} ${def.leads ?? ''}`} onClick={() => openNew(undefined, 'Total leads', f.basis !== 'created')} />
           <Kpi tone="tone-teal" icon={<Icon.Touch />} title="Total lead touches" value={fmtInt(k.touches)} sub={`${fmt2(k.touches_per_lead)} touches per lead`} def={def.touches} onClick={() => open('touches', 'Total lead touches')} />
-          <Kpi tone="tone-orange" icon={<Icon.Check />} title="Total converted" value={fmtInt(k.converted_first)} sub={f.pay ? `${fmtPct(k.conv_rate_first)} of leads · first payment after a touch · paid ${f.pfrom} → ${f.pto}` : `${fmtPct(k.conv_rate_first)} of leads · first payment after a touch`} def={`${def.converted_first} ${def.conv_ay}`} onClick={() => open('converted_first', 'Total converted')}
-            split={aySplit(k.conv_ay.after, 'converted_first', 'Total converted')} />
-          <Kpi tone="tone-slate" icon={<Icon.Check />} title="Converted before the window" value={fmtInt(k.converted_before)} sub={`${fmtPct(k.conv_rate_before)} of leads · already customers · first payment before ${k.window_from}`} def={`${def.converted_before} ${def.conv_ay}`} onClick={() => open('converted_before', 'Converted before the window')}
-            split={aySplit(k.conv_ay.before, 'converted_before', 'Converted before the window')} />
+          <Kpi tone="tone-orange" icon={<Icon.Check />} title="Total converted" value={fmtInt(k.converted_first)} sub={f.pay ? `${fmtPct(k.conv_rate_first)} of leads · first payment after a touch (never touched: after creation) · paid ${f.pfrom} → ${f.pto}` : `${fmtPct(k.conv_rate_first)} of leads · first payment after a touch (never touched: after creation)`} def={`${def.converted_first} ${def.conv_ay}`} onClick={() => open('converted_first', 'Total converted', undefined, undefined, 'touched leads of the selection with a first valid payment on/after a touch · the never-touched converted leads are under the "no touch" split')}
+            split={[...aySplit(k.conv_ay.after, 'converted_first', 'Total converted'), { label: 'no touch', value: fmtInt(k.converted_untouched), title: 'leads of the selection never touched, first valid payment on/after the day they were created · click for the leads', onClick: () => openUntouched('after') }]} />
+          <Kpi tone="tone-slate" icon={<Icon.Check />} title="Converted before the window" value={fmtInt(k.converted_before)} sub={`${fmtPct(k.conv_rate_before)} of leads · already customers · first payment before ${k.window_from}`} def={`${def.converted_before} ${def.conv_ay}`} onClick={() => open('converted_before', 'Converted before the window', undefined, undefined, 'touched leads of the selection whose first valid payment is before the window start · the never-touched ones are under the "no touch" split')}
+            split={[...aySplit(k.conv_ay.before, 'converted_before', 'Converted before the window'), { label: 'no touch', value: fmtInt(k.converted_before_untouched), title: 'leads of the selection never touched, first valid payment before the window start · click for the leads', onClick: () => openUntouched('before') }]} />
           <Kpi tone="tone-violet" icon={<Icon.Avg />} title="Avg touches before conversion" value={fmt2(k.avg_touches_alltime)} def={`${def.avg_touches_alltime} ${def.avg_per_lead}`} onClick={() => open('avg_alltime', 'Avg touches before conversion', undefined, undefined, 'converted leads with their all-time touch counts (no date filter)')} />
           <Kpi tone="tone-green" icon={<Icon.Calendar />} title="Avg touches before conversion (date-wise)" value={fmt2(k.avg_touches_window)} def={`${def.avg_touches_window} ${def.avg_per_lead}`} onClick={() => open('avg_window', 'Avg touches before conversion (date-wise)', undefined, undefined, 'converted leads touched in the window, with their all-time touch counts')} />
           <Kpi tone="tone-slate" icon={<Icon.Spark />} title="Stage Converted · not paid" value={fmtInt(k.stage_conv_unpaid)} sub={`of ${fmtInt(k.stage_conv_total)} leads in stage Converted · no payment on record`} def={def.stage_conv_unpaid} onClick={() => open('stage_conv_unpaid', 'Stage Converted · not paid')} />
