@@ -68,9 +68,9 @@ function DimCard({ title, rows, dim, measures, tone, opts, loading, error, onRet
       actions={<CardSearch value={search} onChange={setSearch} count={filtered.length} onApply={() => setList(dim, filtered.map((r) => r.key))} />}
       help={opts.help ?? `${title}: touches in the window grouped by this value. ${def.dim_converted ?? ''}`}>
       {opts.asTable
-        ? <DataTable rows={filtered} compact maxHeight="100%" initialSort={{ id: m1, desc: true }} onRowClick={(r) => toggleValue(dim, r.key)} columns={cols} highlight={(r) => selected.includes(r.key)} />
+        ? <DataTable rows={filtered} compact maxHeight="100%" initialSort={{ id: m1, desc: true }} onRowClick={(r) => { if (r.key !== '(no touch)') toggleValue(dim, r.key); }} columns={cols} highlight={(r) => selected.includes(r.key)} />
         : <HBars colorful={opts.colorful} data={data.map((r) => ({ key: r.key, value: r[m1], secondary: m2 ? r[m2] : null, selected: selected.includes(r.key), extra: { 'Total leads': fmtInt(r.leads), 'Conv %': fmtPct(r.conv_rate) } }))}
-            valueLabel={MEASURE_LABEL[m1]} secondaryLabel={m2 ? MEASURE_LABEL[m2] : undefined} secondaryFormat={fmtInt} onClick={(key) => toggleValue(dim, key)} />}
+            valueLabel={MEASURE_LABEL[m1]} secondaryLabel={m2 ? MEASURE_LABEL[m2] : undefined} secondaryFormat={fmtInt} onClick={(key) => { if (key !== '(no touch)') toggleValue(dim, key); }} />}
     </ChartCard>
   );
 }
@@ -202,14 +202,14 @@ export default function Overview() {
 
       <div className="grid gap-4 xl:grid-cols-2">
         {dimCard('Touch point analysis', d?.touch_point, 'touch_point', ['touches', 'converted'], 'tone-teal', { colorful: true, height: 270 })}
-        {dimCard('Lead source distribution', d?.source, 'source', ['touches', 'converted'], 'tone-orange', { asTable: true, height: 270, help: 'Source recorded on the touch: total lead touches, converted leads and total leads per source.' })}
+        {dimCard('Lead source distribution', d?.source, 'source', ['leads', 'converted'], 'tone-orange', { asTable: true, height: 270, subtitle: 'Total leads by the source of their FIRST touch in the selection · each lead once · click rows to filter the other cards', help: 'A split of Total leads: each lead is counted once, under the source recorded on its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch, so the Total leads column adds up to the page total. Total lead touches = every touch carrying that source, including later touches of leads first touched elsewhere. Converted = the dashboard rule for the lead.' })}
         {dimCard('Class (Lead Master)', d?.class_raw, 'class_raw', ['touches', 'converted'], 'tone-violet', { limit: 14, height: 300, colorful: true, help: 'The Class field on the Salesforce lead record (Lead Master), not the interested course and not the purchased course: lead touches in the window of converted leads, grouped by that class. Purchased course and grade are on the Converted page; interested courses have their own card and filter.' })}
         {dimCard('LM Reason', d?.lm_reason, 'lm_reason', ['leads'], 'tone-amber', { limit: 14, height: 300, help: def.lm_reason, subtitle: 'Total leads by the LM Reason field on the lead · click a row to filter every card' })}
         {dimCard('Interested course', d?.ic_course, 'ic_course', ['leads', 'converted'], 'tone-pink', { asTable: true, height: 300, help: def.ic_course, subtitle: 'Total leads by the course on their Interested Course records (interest, not purchase) · a lead with several courses appears under each · click rows to filter every page (multi-select)' })}
         {dimCard('Last call reason', d?.reason, 'call_reason', ['leads', 'converted'], 'tone-amber', { limit: 14, height: 300, help: def.reason, subtitle: 'Total leads by the reason recorded on their last call · click a row to filter every card' })}
-        {dimCard('Medium', d?.medium, 'medium', ['leads', 'converted'], 'tone-green', { asTable: true, height: 260 })}
-        {dimCard('Campaign name', d?.campaign, 'campaign', ['leads', 'touches'], 'tone-brand', { asTable: true, height: 260 })}
-        {dimCard('Staff-wise', d?.staff, 'staff', ['leads', 'touches'], 'tone-pink', { asTable: true, height: 300 })}
+        {dimCard('Medium', d?.medium, 'medium', ['leads', 'converted'], 'tone-green', { asTable: true, height: 260, subtitle: 'Total leads by the medium of their FIRST touch in the selection · each lead once', help: 'A split of Total leads: each lead once, under the medium of its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch. Total lead touches = every touch carrying that medium.' })}
+        {dimCard('Campaign name', d?.campaign, 'campaign', ['leads', 'touches'], 'tone-brand', { asTable: true, height: 260, subtitle: 'Total leads by the campaign of their FIRST touch in the selection · each lead once', help: 'A split of Total leads: each lead once, under the campaign of its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch. Total lead touches = every touch of that campaign.' })}
+        {dimCard('Staff-wise', d?.staff, 'staff', ['leads', 'touches'], 'tone-pink', { asTable: true, height: 300, subtitle: 'Total leads by the staff of their FIRST touch in the selection · each lead once', help: 'A split of Total leads: each lead once, under the staff recorded on its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch. Total lead touches = every touch of that staff.' })}
         <ChartCard title="Leads still waiting in a stage" tone="tone-red" loading={q.isLoading} error={q.error} rows={staleRows} height={240}
           subtitle={`still in the stage, created more than ${k?.stale_days ?? staleDays} days ago and not touched in the last ${k?.stale_days ?? staleDays} days · click a row for the leads`}
           help={`${def.stale_new ?? ''} ${def.stale_nc ?? ''}`}

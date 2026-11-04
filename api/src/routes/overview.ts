@@ -136,7 +136,7 @@ async function byDim(sql: Sql, w: Frag, col: string, conv: Frag, convFirst: Frag
 }
 
 /** Dimension columns of the Overview cards (one GROUPING SETS statement when they share the main WHERE) */
-const CARD_DIMS = ['touch_point', 'source', 'class_raw', 'medium', 'campaign', 'staff', 'lm_reason'] as const;
+const CARD_DIMS = ['touch_point', 'class_raw', 'lm_reason'] as const;
 type CardDim = (typeof CARD_DIMS)[number];
 const joinFrags = (sql: Sql, parts: Frag[], sep: Frag) => parts.reduce((a, x) => sql`${a}${sep}${x}`);
 
@@ -182,6 +182,12 @@ overview.get('/overview', (c) =>
     // part of the two conversion KPIs too (user rule, 2026-11-04). "After a touch" cannot apply to them: a never-touched lead is converted when
     // its FIRST valid payment (dashboard rule, phone or alternative number) is on/after the day it was created and not before the window start,
     // like the touched ones; a first payment before the window start puts it under "Converted before the window". One indexed lookup per lead.
+    // "no touch" follows the basis: lead-created basis = no touch at all (all touches of those leads count); touch-date basis = no touch dated
+    // inside the window (Total leads there = created in the window OR touched in it, so a lead created in it with touches only outside it is
+    // part of Total leads but of no touch-based card)
+    const noTouch = f.basis === 'created'
+      ? sql`NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id)`
+      : sql`NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id AND t.touch_date BETWEEN ${periods.current.from} AND ${periods.current.to})`;
     const untouched = sql`SELECT l.lead_id, l.created_date, (SELECT min(vp.payment_date) FROM analytics.v_valid_payment_x vp WHERE vp.phone_key = l.phone_key) AS first_pay
                           FROM analytics.mv_lead_lite l WHERE ${newLeadWhere(sql, f, periods.current)} AND l.phone_valid
                             AND NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id)`;
@@ -198,7 +204,7 @@ overview.get('/overview', (c) =>
         SELECT l.lead_id, l.created_date, l.lead_stage, l.class_raw, l.lm_reason,
                CASE WHEN l.phone_valid THEN (SELECT min(vp.payment_date) FROM analytics.v_valid_payment_x vp WHERE vp.phone_key = l.phone_key) END AS first_pay
         FROM analytics.mv_lead_lite l WHERE ${newLeadWhere(sql, f, periods.current, { skip })}
-          AND NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id)),
+          AND ${noTouch}),
       c AS (SELECT u.*, (u.first_pay >= u.created_date) AS conv, ${uAfter} AS conv_first FROM u)
       SELECT d.dim, COALESCE(d.key, '(null)') AS key, count(DISTINCT c.lead_id)::int AS leads,
              count(DISTINCT c.lead_id) FILTER (WHERE c.conv)::int AS converted, count(DISTINCT c.lead_id) FILTER (WHERE c.conv_first)::int AS converted_first, 0::int AS ics
@@ -217,6 +223,8 @@ overview.get('/overview', (c) =>
       FROM c JOIN salesforce.interested_course__c ic ON ic.lead_master__c = c.lead_id AND ic.isdeleted = false LEFT JOIN salesforce.course__c cr ON cr.id = ic.course__c
       WHERE ${icCourseExpr(sql)} IS NOT NULL GROUP BY 2
       UNION ALL
+      SELECT 'no_touch', '(no touch)', count(*)::int, count(*) FILTER (WHERE c.conv)::int, count(*) FILTER (WHERE c.conv_first)::int, 0 FROM c
+      UNION ALL
       SELECT 'stage_conv', k.key, count(*)::int, 0, 0, 0
       FROM c CROSS JOIN LATERAL (VALUES ('total', c.lead_stage = 'Converted'), ('unpaid', c.lead_stage = 'Converted' AND c.first_pay IS NULL),
                                         ('paid_other', c.conv AND c.lead_stage IS DISTINCT FROM 'Converted')) AS k(key, hit)
@@ -232,6 +240,30 @@ overview.get('/overview', (c) =>
     const sharedDims = CARD_DIMS.filter((d) => !f[d]?.length);
     const cardsP = byDims(sql, w, sharedDims, conv, convFirst);
     const card = (d: CardDim) => (f[d]?.length ? byDim(sql, wx(d), d, conv, convFirst, 2000, f[d] ?? []) : cardsP.then((x) => x[d] ?? []));
+    // Lead source / Medium / Campaign / Staff as a split of Total leads (user rule 2026-11-04): each lead counted ONCE, under the value of its
+    // FIRST touch in the selection (earliest touch); "touches" stays the number of touches carrying that value (a lead's later touches count
+    // there, not in leads). The never-touched leads of the selection are folded in afterwards as a "(no touch)" row, so the leads column adds
+    // up to Total leads. Same self-skip rule as the other cards: a filtered dim gets its own statement without that filter.
+    const FT_DIMS = ['source', 'medium', 'campaign', 'staff'] as const;
+    type FtDim = (typeof FT_DIMS)[number];
+    const firstTouchDims = (ww: Frag, dims: readonly FtDim[]): Promise<(DimRow & { dim: string })[]> => {
+      if (!dims.length) return Promise.resolve([]);
+      const firsts = joinFrags(sql, dims.map((d) => sql`(array_agg(t.${sql(d)} ORDER BY t.touch_at, t.touch_id))[1] AS ${sql(d)}`), sql`, `);
+      const lvals = joinFrags(sql, dims.map((d) => sql`(${d}, lk.${sql(d)}::text)`), sql`, `);
+      const tvals = joinFrags(sql, dims.map((d) => sql`(${d}, t.${sql(d)}::text)`), sql`, `);
+      return sql<(DimRow & { dim: string })[]>`
+        WITH lk AS (SELECT t.lead_id, ${firsts}, bool_or(${conv}) AS conv, bool_or(${convFirst}) AS conv_first FROM analytics.mv_touch_flat t WHERE ${ww} GROUP BY t.lead_id),
+        l AS (SELECT d.dim, COALESCE(d.key, '(null)') AS key, count(*)::int AS leads, count(*) FILTER (WHERE lk.conv)::int AS converted, count(*) FILTER (WHERE lk.conv_first)::int AS converted_first
+              FROM lk CROSS JOIN LATERAL (VALUES ${lvals}) AS d(dim, key) GROUP BY 1, 2),
+        tc AS (SELECT d.dim, COALESCE(d.key, '(null)') AS key, count(*)::int AS touches
+               FROM analytics.mv_touch_flat t CROSS JOIN LATERAL (VALUES ${tvals}) AS d(dim, key) WHERE ${ww} GROUP BY 1, 2)
+        SELECT COALESCE(l.dim, tc.dim) AS dim, COALESCE(l.key, tc.key) AS key, COALESCE(l.leads, 0)::int AS leads, COALESCE(l.converted, 0)::int AS converted,
+               COALESCE(l.converted_first, 0)::int AS converted_first, COALESCE(tc.touches, 0)::int AS touches
+        FROM l FULL JOIN tc ON tc.dim = l.dim AND tc.key = l.key`.then((rows) => rows);
+    };
+    const ftShared = firstTouchDims(w, FT_DIMS.filter((d) => !f[d]?.length));
+    const ftCard = (d: FtDim): Promise<DimRow[]> => (f[d]?.length ? firstTouchDims(wx(d), [d]) : ftShared)
+      .then((rows) => rows.filter((r) => r.dim === d).map(({ dim: _dim, ...r }) => ({ ...r, conv_rate: pct(r.converted, r.leads) })).sort((a, b) => b.leads - a.leads));
     const QN = ['kpis', 'stale', 'avg_window', 'avg_alltime', 'stages', 'ic_status', 'touch_point', 'source', 'class_raw', 'call_reason', 'medium', 'campaign', 'staff', 'daily', 'stage_react', 'lm_reason', 'new_leads', 'revised_new', 'tat', 'leads_union', 'fees', 'ic_course', 'conv_ay', 'conv_untouched', 'untouched_dims'];
     const [[k], [stale], [avgWin], [avgAll], stages, icStatus, touchPoint, source, classRaw, reason, medium, campaign, staff, daily, reactRows, lmReason, [newLeads], revisedNew, tatRows, [leadsUnion], [fees], icCourse, convAy, [convU], uRows] = await timedAll(QN, [
       sql<{ touches: number; leads: number; converted: number; converted_first: number; converted_before: number; sf_converted: number; stage_conv_total: number; stage_conv_unpaid: number; paid_other_stage: number; touches_of_converted: number }[]>`
@@ -277,12 +309,12 @@ overview.get('/overview', (c) =>
         JOIN salesforce.interested_course__c ic ON ic.lead_master__c = k.lead_id AND ic.isdeleted = false
         WHERE NULLIF(btrim(ic.status__c),'') IS NOT NULL
         GROUP BY 1 ORDER BY leads DESC`,
-      card('touch_point'), card('source'), card('class_raw'), sql<DimRow[]>`
+      card('touch_point'), ftCard('source'), card('class_raw'), sql<DimRow[]>`
         SELECT CASE WHEN c.lead_id IS NULL THEN '(no call)' WHEN c.last_reason IS NULL THEN '(no reason recorded)' ELSE c.last_reason END AS key, count(*)::int AS touches, count(DISTINCT t.lead_id)::int AS leads,
                count(DISTINCT t.lead_id) FILTER (WHERE ${conv})::int AS converted, count(DISTINCT t.lead_id) FILTER (WHERE ${convFirst})::int AS converted_first
         FROM analytics.mv_touch_flat t LEFT JOIN salesforce.lead_calls c ON c.lead_id = t.lead_id
         WHERE ${wx('call_reason')} GROUP BY 1 ORDER BY leads DESC LIMIT 500`,
-      card('medium'), card('campaign'), card('staff'),
+      ftCard('medium'), ftCard('campaign'), ftCard('staff'),
       sql<{ d: string; touches: number; leads: number; converted: number }[]>`
         SELECT t.touch_date::text AS d, count(*)::int AS touches, count(DISTINCT t.lead_id)::int AS leads,
                count(DISTINCT t.lead_id) FILTER (WHERE ${conv})::int AS converted
@@ -435,6 +467,7 @@ overview.get('/overview', (c) =>
     const icStatusAll = fold(icStatus, 'ic_status', (r, u) => ({ key: r?.key ?? u.key, leads: (r?.leads ?? 0) + u.leads, ics: (r?.ics ?? 0) + u.ics })).sort((a, b) => b.leads - a.leads);
     const classRawAll = foldDim(classRaw, 'class_raw', 'touches'), lmReasonAll = foldDim(lmReason, 'lm_reason', 'touches');
     const reasonAll = foldDim(reason, 'call_reason'), icCourseAll = foldDim(icCourse, 'ic_course');
+    const sourceAll = foldDim(source, 'no_touch'), mediumAll = foldDim(medium, 'no_touch'), campaignAll = foldDim(campaign, 'no_touch'), staffAll = foldDim(staff, 'no_touch');
     const uStage = (key: string) => uBy('stage_conv').find((r) => r.key === key)?.leads ?? 0;
     const leadsAll = f.basis === 'created' ? (newLeads?.new_leads ?? k.leads) : (leadsUnion?.n ?? k.leads);
     return {
@@ -478,7 +511,7 @@ overview.get('/overview', (c) =>
         ...(fees ?? { fee_payers: 0, fee_payments: 0, fee_received: 0, proposed_fee: 0, fee_enrollments: 0, fee_enrollments_unknown: 0 }), fee_window: feeWin,
       },
       stages: stagesAll, ic_status: icStatusAll, ic_course: icCourseAll, tat: { created: tatShape('created'), touch: tatShape('touch'), activity: tatShape('activity') },
-      touch_point: touchPoint, source, class_raw: classRawAll, reason: reasonAll, lm_reason: lmReasonAll, medium, campaign, staff, daily,
+      touch_point: touchPoint, source: sourceAll, class_raw: classRawAll, reason: reasonAll, lm_reason: lmReasonAll, medium: mediumAll, campaign: campaignAll, staff: staffAll, daily,
       definitions: {
         leads: f.basis === 'created'
           ? 'Leads created (IST) inside the window, touched or not, PLUS older leads that received a touch dated inside the window. New leads is the created part, so it is always a subset of this figure. Deleted leads are excluded; duplicate leads are excluded unless toggled on. The rates, charts and tables below stay touch-level: they cover the leads created in the window that have a touch.'
