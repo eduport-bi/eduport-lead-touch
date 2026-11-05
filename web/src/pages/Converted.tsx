@@ -14,6 +14,7 @@ interface Resp {
   period: { from: string; to: string };
   kpis: { users: number; new_users: number; no_touch: number; no_lead: number; payments_all: number; revenue_all: number; sales: number; sales_app: number; sales_ujra: number; touches: number; no_touch_pct: number | null; no_lead_pct: number | null; };
   by_stage: Dim[]; by_last_touch_point: Dim[]; by_last_source: Dim[]; by_last_medium: Dim[]; by_last_campaign: Dim[]; by_last_staff: Dim[]; by_course: Dim[]; by_grade: Dim[];
+  by_first_touch_point: Dim[]; by_first_source: Dim[]; by_first_medium: Dim[]; by_first_campaign: Dim[]; by_first_staff: Dim[];
   daily: { d: string; users: number; payments: number; revenue: number }[];
   tat: Record<'created' | 'touch', { leads: number; avg_days: number | null; median_days: number | null; buckets: { key: string; leads: number }[] }>;
   grades: string[];
@@ -31,7 +32,9 @@ const USER_COLS: Col<Row>[] = [
   { key: 'payments_all_time', header: 'Payments (all time)', align: 'right' }, { key: 'revenue_all_time', header: 'Revenue (all time)', render: (v) => fmtINR(v as number) }, { key: 'first_payment_ever', header: 'First ever payment' },
   { key: 'last_touch_point', header: 'Last touch point' }, { key: 'last_touch_source', header: 'Last touch source' }, { key: 'last_touch_medium', header: 'Last touch medium' },
   { key: 'last_touch_campaign', header: 'Last touch campaign' }, { key: 'last_touch_staff', header: 'Last touch staff' },
-  { key: 'last_touch_at', header: 'Last touch time', render: (v) => fmtDateTime(v as string) }, { key: 'touches_before_payment', header: 'Touches before payment', align: 'right' },
+  { key: 'last_touch_at', header: 'Last touch time', render: (v) => fmtDateTime(v as string) },
+  { key: 'first_touch_point', header: 'First touch point' }, { key: 'first_touch_source', header: 'First touch source' }, { key: 'first_touch_at', header: 'First touch time', render: (v) => fmtDateTime(v as string) },
+  { key: 'touches_before_payment', header: 'Touches before payment', align: 'right' },
   { key: 'lead_source', header: 'Primary source' }, { key: 'owner_name', header: 'Owner' }, { key: 'no_lead', header: 'No lead', render: yesNo }, { key: 'lead_id', header: 'Salesforce Id' },
 ];
 const USER_SORTS: [string, string][] = [['last_payment_date', 'Last payment'], ['first_payment_date', 'First payment'], ['revenue', 'Revenue'], ['payments', 'Payments'], ['touches_before_payment', 'Touches before payment'], ['last_touch_at', 'Last touch time'], ['lead_name', 'Lead ID'], ['lead_stage', 'Stage']];
@@ -117,8 +120,8 @@ export default function Converted() {
         {q.isLoading && Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-[92px]" />)}
         {k && <>
           <Kpi tone="tone-orange" icon={<Icon.Check />} title={pm === 'm0' ? 'Sales (courses)' : 'Courses paid'} value={fmtInt(k.sales)} sub={`app ${fmtInt(k.sales_app)} · Ujra ${fmtInt(k.sales_ujra)}`} def={def.sales} onClick={() => open('Converted users')} />
-          <Kpi tone="tone-green" icon={<Icon.Spark />} title="New customers" value={fmtInt(k.new_users)} sub={`${fmtPct(k.users ? Math.round((k.new_users / k.users) * 10000) / 100 : null)} first ever payment in window`} def={def.new_users} />
-          <Kpi tone="tone-violet" icon={<Icon.Avg />} title="Revenue (window)" value={fmtINR(k.revenue_all)} sub="payment amounts dated in the window" def={def.revenue} />
+          <Kpi tone="tone-green" icon={<Icon.Spark />} title="New customers" value={fmtInt(k.new_users)} sub={`${fmtPct(k.users ? Math.round((k.new_users / k.users) * 10000) / 100 : null)} first ever payment in window`} def={def.new_users} onClick={() => open('New customers', 'new_customer', '1', 'paying users whose FIRST ever valid payment is inside the window · click a row for the lead record')} />
+          <Kpi tone="tone-violet" icon={<Icon.Avg />} title="Revenue (window)" value={fmtINR(k.revenue_all)} sub="payment amounts dated in the window" def={def.revenue} onClick={() => open('Revenue (window)', undefined, undefined, 'paying users of the selection with their payments and revenue inside the window · sort by Revenue · click a row for the lead record')} />
           <Kpi tone="tone-pink" icon={<Icon.Touch />} title="No touch before payment" value={fmtInt(k.no_touch)} sub={`${fmtPct(k.no_touch_pct)} of users`} def={def.no_touch} onClick={() => open('No touch before payment', 'last_touch_point', 'No Touch Before Payment')} />
           <Kpi tone="tone-slate" icon={<Icon.Users />} title="No Salesforce lead" value={fmtInt(k.no_lead)} sub={`${fmtPct(k.no_lead_pct)} of users`} def={def.no_lead} onClick={() => open('Users with no Salesforce lead', 'lead_stage', '(null)')} />
         </>}
@@ -128,13 +131,18 @@ export default function Converted() {
         <ChartCard title="Lead stage distribution" tone="tone-brand" subtitle="converted users by lead stage · click a slice to filter" loading={q.isLoading} error={q.error} rows={d?.by_stage ?? []} columns={dimCols} height={260} help={def.stage}>
           <Donut data={(d?.by_stage ?? []).map((s) => ({ key: s.key === '(null)' ? 'No Salesforce lead' : s.key, value: s.users, selected: (f.lists.lead_stage ?? []).includes(s.key) }))} valueLabel="Converted (users)" centerLabel="users" onClick={(key) => toggleValue('lead_stage', key === 'No Salesforce lead' ? '(null)' : key)} />
         </ChartCard>
-        {card('Touch point analysis', d?.by_last_touch_point, 'last_touch_point', 'tone-teal', { filterDim: 'touch_point', height: 260 })}
+        {card('Touch point analysis (last touch)', d?.by_last_touch_point, 'last_touch_point', 'tone-teal', { filterDim: 'touch_point', height: 260 })}
+        {card('Touch point analysis (first touch)', d?.by_first_touch_point, 'first_touch_point', 'tone-teal', { height: 260, help: def.first_credit })}
         {card('Class wise conversion (purchased course)', d?.by_course, 'course', 'tone-violet', { asTable: true, cols: payCols, help: def.course, pick: { selected: courses, toggle: toggleIn(courses, setCourses), set: setCourses } })}
         {card('Purchased grade', d?.by_grade, 'grade', 'tone-amber', { cols: payCols, help: def.grade, height: 280, pick: { selected: grades, toggle: toggleIn(grades, setGrades), set: setGrades } })}
-        {card('Staff-wise (last touch)', d?.by_last_staff, 'last_touch_staff', 'tone-pink', { filterDim: 'staff', asTable: true })}
         {card('Lead source distribution (last touch)', d?.by_last_source, 'last_touch_source', 'tone-orange', { filterDim: 'source', asTable: true })}
+        {card('Lead source distribution (first touch)', d?.by_first_source, 'first_touch_source', 'tone-orange', { asTable: true, help: def.first_credit })}
+        {card('Staff-wise (last touch)', d?.by_last_staff, 'last_touch_staff', 'tone-pink', { filterDim: 'staff', asTable: true })}
+        {card('Staff-wise (first touch)', d?.by_first_staff, 'first_touch_staff', 'tone-pink', { asTable: true, help: def.first_credit })}
         {card('Medium wise conversion (last touch)', d?.by_last_medium, 'last_touch_medium', 'tone-green', { filterDim: 'medium', asTable: true })}
+        {card('Medium wise conversion (first touch)', d?.by_first_medium, 'first_touch_medium', 'tone-green', { asTable: true, help: def.first_credit })}
         {card('Campaign wise conversion (last touch)', d?.by_last_campaign, 'last_touch_campaign', 'tone-brand', { filterDim: 'campaign', asTable: true })}
+        {card('Campaign wise conversion (first touch)', d?.by_first_campaign, 'first_touch_campaign', 'tone-brand', { asTable: true, help: def.first_credit })}
         <ChartCard title="Turnaround time" tone="tone-green" help={def.tat} loading={q.isLoading} error={q.error} rows={d?.tat?.[tat]?.buckets ?? []} height={240}
           subtitle={d?.tat ? `${fmtInt(d.tat[tat].leads)} paying users · median ${d.tat[tat].median_days == null ? '–' : fmt1(d.tat[tat].median_days)} d · average ${d.tat[tat].avg_days == null ? '–' : fmt1(d.tat[tat].avg_days)} d` : 'days to the first payment'}
           actions={<Segmented size="xs" value={tat} onChange={setTat} options={[

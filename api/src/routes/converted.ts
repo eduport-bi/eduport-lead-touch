@@ -12,7 +12,7 @@ import { shapeTat, tatBucket, type TatRow } from './overview';
  *             users with no touch before the payment are shown as "No Touch Before Payment"
  *   class   : grade of the purchased course (core_grade.title) -> the in-page "Purchased grade" filter and table
  *   sheets  : CONVERTED (users), Lead stage distribution, Class wise conversion (purchased course), STAFF-WISE,
- *             Lead source / Touch point / Medium / Campaign by LAST touch
+ *             Lead source / Touch point / Medium / Campaign / Staff by LAST touch, and the same five by FIRST touch (2026-11-05)
  * Reads analytics.mv_payer (one row per paying user) + app.home_payment/app.core_batch for per-payment course & grade.
  */
 export const converted = new Hono<AppEnv>();
@@ -32,6 +32,24 @@ const DIMS: Record<string, string> = {
   last_touch_point: 'last_touch_point', last_touch_source: 'last_touch_source', last_touch_medium: 'last_touch_medium', last_touch_campaign: 'last_touch_campaign',
   last_touch_staff: 'last_touch_staff', lead_stage: 'lead_stage', lead_source: 'lead_source', class_raw: 'class_raw', owner_name: 'owner_name',
 };
+
+/**
+ * First touch of a paying user (2026-11-05): the EARLIEST touch, across the Salesforce leads on the account's own phone or alternative number
+ * (mv_user_phone, the same lead set mv_payer uses), dated on/before the user's last valid payment day; users whose touches all came after the
+ * payment (or with no lead) are "No Touch Before Payment", like the last-touch credit. mv_payer stores the last touch only, so this is computed
+ * precomputed in analytics.mv_payer_first_touch (sql/048, one row per payer, refreshed right after mv_payer): computed per request it cost
+ * 8-28 s for a month of payers. A payer missing there (new since the last refresh) reads as "No Touch Before Payment" until the next refresh.
+ * `w` = the payer selection; the rows carry user_id, the five first-touch values and the measures the cards sum.
+ */
+function firstTouchSet(sql: Sql, w: Frag, firstPay: Frag): Frag {
+  return sql`
+    SELECT m.user_id, m.touches_before_payment, m.revenue, ${firstPay} AS first_pay, ft.first_touch_at,
+           COALESCE(ft.first_touch_point, 'No Touch Before Payment') AS first_touch_point, COALESCE(ft.first_touch_source, 'No Touch Before Payment') AS first_touch_source,
+           COALESCE(ft.first_touch_medium, 'No Touch Before Payment') AS first_touch_medium, COALESCE(ft.first_touch_campaign, 'No Touch Before Payment') AS first_touch_campaign,
+           COALESCE(ft.first_touch_staff, 'No Touch Before Payment') AS first_touch_staff
+    FROM analytics.mv_payer m LEFT JOIN analytics.mv_payer_first_touch ft ON ft.user_id = m.user_id WHERE ${w}`;
+}
+const FIRST_DIMS = ['first_touch_point', 'first_touch_source', 'first_touch_medium', 'first_touch_campaign', 'first_touch_staff'] as const;
 
 /** payments-in-window semi-join (+ optional grade / course restriction) */
 function payWindow(sql: Sql, p: Period, grades: string[], courses: string[], pm: PayMethod = 'all'): Frag {
@@ -73,6 +91,12 @@ function payerWhere(sql: Sql, f: Filters, p: Period, q: Record<string, string>, 
   if (q.dim && q.value !== undefined) {
     if (q.dim === 'grade') c.push(payWindow(sql, p, [q.value], [], pm));
     else if (q.dim === 'course') c.push(payWindow(sql, p, [], [q.value], pm));
+    else if (q.dim === 'new_customer') c.push(sql`${pm === 'm0' ? sql`m.first_payment_date_m0` : sql`m.first_payment_date`} BETWEEN ${p.from} AND ${p.to}`);
+    else if ((FIRST_DIMS as readonly string[]).includes(q.dim)) {
+      c.push(q.value === 'No Touch Before Payment'
+        ? sql`COALESCE((SELECT ft.${sql(q.dim)} FROM analytics.mv_payer_first_touch ft WHERE ft.user_id = m.user_id), 'No Touch Before Payment') = 'No Touch Before Payment'`
+        : sql`m.user_id IN (SELECT ft.user_id FROM analytics.mv_payer_first_touch ft WHERE ft.${sql(q.dim)}::text = ${q.value})`);
+    }
     else {
       const col = DIMS[q.dim];
       if (!col) throw Object.assign(new Error(`unknown dim ${q.dim}`), { status: 400 });
@@ -101,8 +125,16 @@ converted.get('/converted', (c) =>
     const V = VALID(sql, pm);
     const R = payRestrict(sql, q);   // payments / revenue / course / grade / daily count only payments matching the grade or course selection
     const firstPay = pm === 'm0' ? sql`m.first_payment_date_m0` : sql`m.first_payment_date`;
-    const [[k], [pk], byStage, byPoint, bySource, byMedium, byCampaign, byStaff, byCourse, byGrade, daily, grades, tatRows] = await timedAll(
-      ['kpis', 'payments', 'stage', 'touch_point', 'source', 'medium', 'campaign', 'staff', 'course', 'grade', 'daily', 'grades', 'tat'], [
+    // first-touch cards (one statement for the five dims; they drill, they do not filter, so no self-skip is needed)
+    const firstP = sql<{ dim: string; key: string; users: number; touches: number; revenue: number; new_users: number }[]>`
+      WITH ft AS (${firstTouchSet(sql, w, firstPay)})
+      SELECT d.dim, d.key, count(*)::int AS users, COALESCE(sum(ft.touches_before_payment), 0)::int AS touches, COALESCE(sum(ft.revenue), 0)::float8 AS revenue,
+             count(*) FILTER (WHERE ft.first_pay BETWEEN ${p.from} AND ${p.to})::int AS new_users
+      FROM ft CROSS JOIN LATERAL (VALUES ('first_touch_point', ft.first_touch_point), ('first_touch_source', ft.first_touch_source), ('first_touch_medium', ft.first_touch_medium),
+                                         ('first_touch_campaign', ft.first_touch_campaign), ('first_touch_staff', ft.first_touch_staff)) AS d(dim, key)
+      GROUP BY 1, 2`;
+    const [[k], [pk], byStage, byPoint, bySource, byMedium, byCampaign, byStaff, byCourse, byGrade, daily, grades, tatRows, firstRows] = await timedAll(
+      ['kpis', 'payments', 'stage', 'touch_point', 'source', 'medium', 'campaign', 'staff', 'course', 'grade', 'daily', 'grades', 'tat', 'first_touch'], [
       sql<{ users: number; new_users: number; no_touch: number; no_lead: number; revenue: number; touches: number }[]>`
         SELECT count(*)::int AS users, count(*) FILTER (WHERE ${pm === 'm0' ? sql`m.first_payment_date_m0` : sql`m.first_payment_date`} BETWEEN ${p.from} AND ${p.to})::int AS new_users,
                count(*) FILTER (WHERE m.last_touch_id IS NULL)::int AS no_touch, count(*) FILTER (WHERE m.no_lead)::int AS no_lead,
@@ -149,11 +181,19 @@ converted.get('/converted', (c) =>
         SELECT kind, ${tatBucket(sql, sql`days`)} AS key, count(*)::int AS leads, NULL::float8 AS avg_days, NULL::float8 AS median_days FROM d GROUP BY 1, 2
         UNION ALL
         SELECT kind, '_all', count(*)::int, avg(days)::float8, percentile_cont(0.5) WITHIN GROUP (ORDER BY days)::float8 FROM d GROUP BY 1`,
+      firstP,
     ]);
+    const byFirst = (dim: (typeof FIRST_DIMS)[number]): PayerDim[] => {
+      const rows = firstRows.filter((r) => r.dim === dim).sort((a, b) => b.users - a.users);
+      const tot = rows.reduce((s, r) => s + r.users, 0);
+      return rows.map(({ dim: _d, ...r }) => ({ ...r, share_pct: pct(r.users, tot) }));
+    };
     return {
       period: p, pm,
       kpis: { ...k, ...pk, no_touch_pct: pct(k.no_touch, k.users), no_lead_pct: pct(k.no_lead, k.users) },
       by_stage: byStage, by_last_touch_point: byPoint, by_last_source: bySource, by_last_medium: byMedium, by_last_campaign: byCampaign, by_last_staff: byStaff,
+      by_first_touch_point: byFirst('first_touch_point'), by_first_source: byFirst('first_touch_source'), by_first_medium: byFirst('first_touch_medium'),
+      by_first_campaign: byFirst('first_touch_campaign'), by_first_staff: byFirst('first_touch_staff'),
       by_course: byCourse, by_grade: byGrade, daily, grades: grades.map((g) => g.key),
       tat: { created: shapeTat(tatRows, 'created'), touch: shapeTat(tatRows, 'touch') },
       definitions: {
@@ -173,6 +213,7 @@ converted.get('/converted', (c) =>
         no_lead: 'Paying users whose phone matches no Salesforce lead.',
         credit: 'Every user is credited to ONE touch: the latest touch dated on/before its last valid payment day, across all Salesforce leads with the same phone. If that last touch is an Eduport App touch made less than 2 hours before the payment, the credit goes to the touch before it; when the app touch is the only touch, it keeps the credit. Touch point, source, medium, campaign and staff come from that touch.',
         touches: 'Number of touches on/before the payment for the users in the row.',
+        first_credit: 'First-touch view: every user is credited to its EARLIEST touch dated on/before its last valid payment day, across all Salesforce leads on the account\'s phone or alternative number - the touch that brought the lead in. "No Touch Before Payment" = no lead on the phone, or every touch came after the payment. The last-touch cards credit the latest such touch instead; the same users appear in both, under possibly different values. Rows open the list of those users.',
         course: 'Users by the course they bought; a user buying two courses appears under both. The course is the one of the batch on the payment\x27s ENROLLMENT (where the student is enrolled now), with " - Fastrack" / " - Booster" added from the batch name; the batch written on the payment is used only when the enrollment has none.',
         grade: 'Grade of the course that was bought (batch of the payment\x27s enrollment), not the class recorded on the lead.',
         stage: 'Lead stage of the user\'s most recently created Salesforce lead (one lead per user).',
@@ -186,7 +227,7 @@ converted.get('/converted', (c) =>
 // ---------------------------------------------------------------- payer list (drill-down + CSV)
 const SORTABLE: Record<string, string> = { last_payment_date: 'last_payment_date', first_payment_date: 'first_payment_date', revenue: 'revenue', payments: 'payments', touches_before_payment: 'touches_before_payment', last_touch_at: 'last_touch_at', lead_name: 'lead_name', lead_stage: 'lead_stage', class_raw: 'class_raw' };
 const COLS = ['user_id', 'lead_name', 'first_name', 'last_name', 'mobile', 'email', 'lead_stage', 'class_raw', 'lead_source', 'owner_name', 'courses', 'grades', 'payments', 'first_payment_date', 'last_payment_date', 'revenue', 'payments_all_time', 'revenue_all_time', 'first_payment_ever',
-  'last_touch_point', 'last_touch_source', 'last_touch_medium', 'last_touch_campaign', 'last_touch_staff', 'last_touch_at', 'touches_before_payment', 'no_lead', 'lead_id'];
+  'last_touch_point', 'last_touch_source', 'last_touch_medium', 'last_touch_campaign', 'last_touch_staff', 'last_touch_at', 'first_touch_point', 'first_touch_source', 'first_touch_at', 'touches_before_payment', 'no_lead', 'lead_id'];
 
 function maskRow(r: Rec, role: Role): Rec {
   return { ...r, mobile: maskPhone(r.mobile as string | null, role), phone_key: maskPhone(r.phone_key as string | null, role), email: maskEmail(r.email as string | null, role), first_name: maskName(r.first_name as string | null, role), last_name: maskName(r.last_name as string | null, role) };
@@ -210,6 +251,7 @@ function listQuery(sql: Sql, f: Filters, p: Period, q: Record<string, string>, p
            x.courses, x.grades, x.payments, x.first_payment_date::text AS first_payment_date, x.last_payment_date::text AS last_payment_date, x.revenue,
            x.payments_all_time, x.revenue_all_time, x.first_payment_ever::text AS first_payment_ever,
            x.last_touch_point, x.last_touch_source, x.last_touch_medium, x.last_touch_campaign, x.last_touch_staff, x.last_touch_at::text AS last_touch_at,
+           COALESCE(x.first_touch_point, 'No Touch Before Payment') AS first_touch_point, COALESCE(x.first_touch_source, 'No Touch Before Payment') AS first_touch_source, x.first_touch_at::text AS first_touch_at,
            x.touches_before_payment, x.no_lead, x.lead_id, count(*) OVER ()::int AS total_rows
     FROM (
       SELECT m.user_id, m.lead_name, l.first_name__c AS first_name, l.last_name__c AS last_name, u.phone AS mobile, l.email__c AS email,
@@ -217,8 +259,10 @@ function listQuery(sql: Sql, f: Filters, p: Period, q: Record<string, string>, p
              pw.courses, pw.grades, pw.payments, pw.first_payment_date, pw.last_payment_date, pw.revenue,
              m.payments AS payments_all_time, m.revenue::float8 AS revenue_all_time, m.first_payment_date AS first_payment_ever,
              m.last_touch_point, m.last_touch_source, m.last_touch_medium, m.last_touch_campaign, m.last_touch_staff, m.last_touch_at,
+             ft.first_touch_point, ft.first_touch_source, ft.first_touch_at,
              m.touches_before_payment, m.no_lead, m.lead_id
       FROM analytics.mv_payer m
+      LEFT JOIN analytics.mv_payer_first_touch ft ON ft.user_id = m.user_id
       LEFT JOIN salesforce.lead_master__c l ON l.id = m.lead_id
       LEFT JOIN app.home_customuser u ON u.id = m.user_id
       LEFT JOIN LATERAL (
