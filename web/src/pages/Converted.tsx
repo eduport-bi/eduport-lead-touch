@@ -15,6 +15,7 @@ interface Resp {
   kpis: { users: number; new_users: number; no_touch: number; no_lead: number; payments_all: number; revenue_all: number; sales: number; sales_app: number; sales_ujra: number; touches: number; no_touch_pct: number | null; no_lead_pct: number | null; };
   by_stage: Dim[]; by_last_touch_point: Dim[]; by_last_source: Dim[]; by_last_medium: Dim[]; by_last_campaign: Dim[]; by_last_staff: Dim[]; by_course: Dim[]; by_grade: Dim[];
   by_first_touch_point: Dim[]; by_first_source: Dim[]; by_first_medium: Dim[]; by_first_campaign: Dim[]; by_first_staff: Dim[];
+  by_app_prev_source: Dim[];
   daily: { d: string; users: number; payments: number; revenue: number }[];
   tat: Record<'created' | 'touch', { leads: number; avg_days: number | null; median_days: number | null; buckets: { key: string; leads: number }[] }>;
   grades: string[];
@@ -34,6 +35,7 @@ const USER_COLS: Col<Row>[] = [
   { key: 'last_touch_campaign', header: 'Last touch campaign' }, { key: 'last_touch_staff', header: 'Last touch staff' },
   { key: 'last_touch_at', header: 'Last touch time', render: (v) => fmtDateTime(v as string) },
   { key: 'first_touch_point', header: 'First touch point' }, { key: 'first_touch_source', header: 'First touch source' }, { key: 'first_touch_at', header: 'First touch time', render: (v) => fmtDateTime(v as string) },
+  { key: 'prev_touch_point', header: 'Touch before last' }, { key: 'prev_touch_source', header: 'Source before last' }, { key: 'prev_touch_at', header: 'Touch before last · time', render: (v) => fmtDateTime(v as string) },
   { key: 'touches_before_payment', header: 'Touches before payment', align: 'right' },
   { key: 'lead_source', header: 'Primary source' }, { key: 'owner_name', header: 'Owner' }, { key: 'no_lead', header: 'No lead', render: yesNo }, { key: 'lead_id', header: 'Salesforce Id' },
 ];
@@ -143,6 +145,7 @@ export default function Converted() {
         {card('Medium wise conversion (first touch)', d?.by_first_medium, 'first_touch_medium', 'tone-green', { asTable: true, help: def.first_credit })}
         {card('Campaign wise conversion (last touch)', d?.by_last_campaign, 'last_touch_campaign', 'tone-brand', { filterDim: 'campaign', asTable: true })}
         {card('Campaign wise conversion (first touch)', d?.by_first_campaign, 'first_touch_campaign', 'tone-brand', { asTable: true, help: def.first_credit })}
+        {card('App Installed (last touch) · the touch before it', d?.by_app_prev_source, 'app_prev_source', 'tone-orange', { asTable: true, help: def.app_prev })}
         <ChartCard title="Turnaround time" tone="tone-green" help={def.tat} loading={q.isLoading} error={q.error} rows={d?.tat?.[tat]?.buckets ?? []} height={240}
           subtitle={d?.tat ? `${fmtInt(d.tat[tat].leads)} paying users · median ${d.tat[tat].median_days == null ? '–' : fmt1(d.tat[tat].median_days)} d · average ${d.tat[tat].avg_days == null ? '–' : fmt1(d.tat[tat].avg_days)} d` : 'days to the first payment'}
           actions={<Segmented size="xs" value={tat} onChange={setTat} options={[
