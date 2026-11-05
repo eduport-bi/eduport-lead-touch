@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { authHeaders } from '../lib/api';
 import { downloadText, fmtDateTime, fmtINR, fmtInt, fmtPct, toCsv } from '../lib/format';
 import { DataTable, type Col } from '../components/DataTable';
@@ -19,17 +19,27 @@ const cellText = (v: unknown): unknown => (typeof v === 'number' && Number.isFin
 const normalise = (v: unknown): string | null => { const d = String(cellText(v) ?? '').replace(/\D/g, ''); return d.length >= 10 ? d.slice(-10) : null; };
 const looksLikePhone = (name: string) => /phone|mobile|contact|number|whatsapp|ph\b/i.test(name);
 
+/** The page is unmounted when another menu opens, which would drop the uploaded file and its results. Its state lives in this
+ *  module-level store instead (plain memory, nothing written to disk or storage): it survives menu switches and is gone when the
+ *  browser tab is closed or reloaded. */
+const kept = new Map<string, unknown>();
+function useKept<T>(key: string, initial: T): [T, Dispatch<SetStateAction<T>>] {
+  const [v, setV] = useState<T>(() => (kept.has(key) ? (kept.get(key) as T) : initial));
+  const set: Dispatch<SetStateAction<T>> = (next) => setV((cur) => { const n = typeof next === 'function' ? (next as (c: T) => T)(cur) : next; kept.set(key, n); return n; });
+  return [v, set];
+}
+
 /** Analysis: upload a spreadsheet with phone numbers, get every lead detail back. Parsed in the browser, nothing is stored anywhere. */
 export default function Analysis() {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [parsed, setParsed] = useState<Parsed | null>(null);
-  const [phoneCol, setPhoneCol] = useState<string>('');
+  const [parsed, setParsed] = useKept<Parsed | null>('parsed', null);
+  const [phoneCol, setPhoneCol] = useKept<string>('phoneCol', '');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [results, setResults] = useState<Row[] | null>(null);
-  const [view, setView] = useState<'all' | 'matched' | 'unmatched' | 'converted' | 'multi'>('all');
-  const [stages, setStages] = useState<string[]>([]);
-  const [ay, setAy] = useState<{ kind: 'converted_academic_year' | 'last_paid_academic_year'; year: string } | null>(null);
+  const [results, setResults] = useKept<Row[] | null>('results', null);
+  const [view, setView] = useKept<'all' | 'matched' | 'unmatched' | 'converted' | 'multi'>('view', 'all');
+  const [stages, setStages] = useKept<string[]>('stages', []);
+  const [ay, setAy] = useKept<{ kind: 'converted_academic_year' | 'last_paid_academic_year'; year: string } | null>('ay', null);
   const requestExport = useExportGate();
   const { user: me } = useAuth();
   const [leadId, setLeadId] = useState<string | null>(null);
@@ -166,7 +176,7 @@ export default function Analysis() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Analysis" subtitle="upload a spreadsheet with phone numbers and get every lead's details back · the file is read in your browser and nothing is stored" />
+      <PageHeader title="Analysis" subtitle="upload a spreadsheet with phone numbers and get every lead's details back · the file is read in your browser and nothing is stored · the upload and its results stay on this page until the tab is closed" />
       <div className="card text-xs leading-relaxed text-ink-2">
         <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-3">Before you upload</div>
         <ul className="list-disc space-y-1 pl-4">
