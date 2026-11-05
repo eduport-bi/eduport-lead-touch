@@ -44,7 +44,8 @@ const USER_SORTS: [string, string][] = [['last_payment_date', 'Last payment'], [
 function Kpi(p: { title: string; value: string; sub?: string; def?: string; tone: string; icon: ReactNode; onClick?: () => void }) { return <KpiTile {...p} />; }
 
 type Pick = { selected: string[]; toggle: (key: string) => void; set: (keys: string[]) => void };
-type ConvCardOpts = { filterDim?: ListDim; pick?: Pick; asTable?: boolean; height?: number; limit?: number; help?: string; cols?: Col<Dim>[] };
+/** expand: one row of the table gets a "+" that opens `rows` under it (same columns); clicking a sub-row calls onPick with its key */
+type ConvCardOpts = { filterDim?: ListDim; pick?: Pick; asTable?: boolean; height?: number; limit?: number; help?: string; cols?: Col<Dim>[]; expand?: { key: string; rows: Dim[]; onPick: (key: string) => void } };
 
 function ConvCard({ title, rows, tone, opts, cols, loading, error, onRetry, help, selected, onRow, onApply }: {
   title: string; rows: Dim[] | undefined; tone: string; opts: ConvCardOpts; cols: Col<Dim>[]; loading: boolean; error: unknown; onRetry: () => void; help: string;
@@ -60,7 +61,9 @@ function ConvCard({ title, rows, tone, opts, cols, loading, error, onRetry, help
       loading={loading} error={error} onRetry={onRetry} rows={filtered} columns={cols} height={opts.height ?? 280} help={help}
       actions={<CardSearch value={search} onChange={setSearch} count={filtered.length} onApply={onApply ? () => onApply(filtered.map((r) => r.key)) : undefined} />}>
       {opts.asTable
-        ? <DataTable rows={filtered} compact maxHeight="100%" initialSort={{ id: 'users', desc: true }} onRowClick={(r) => onRow(r.key)} columns={cols} highlight={(r) => selected.includes(r.key)} />
+        ? <DataTable rows={filtered} compact maxHeight="100%" initialSort={{ id: 'users', desc: true }} onRowClick={(r) => onRow(r.key)} columns={cols} highlight={(r) => selected.includes(r.key)}
+            subRows={opts.expand ? (r) => (r.key === opts.expand!.key && opts.expand!.rows.length ? opts.expand!.rows : undefined) : undefined}
+            onSubRowClick={opts.expand ? (_p, c) => opts.expand!.onPick(c.key) : undefined} />
         : <HBars colorful data={data.map((r) => ({ key: r.key, value: r.users, secondary: r.share_pct, selected: selected.includes(r.key), extra: { Revenue: fmtINR(r.revenue), 'Touches before payment': fmtInt(r.touches) } }))}
             valueLabel="Converted (users)" secondaryLabel="Share" onClick={onRow} />}
     </ChartCard>
@@ -137,7 +140,9 @@ export default function Converted() {
         {card('Touch point analysis (first touch)', d?.by_first_touch_point, 'first_touch_point', 'tone-teal', { height: 260, help: def.first_credit })}
         {card('Class wise conversion (purchased course)', d?.by_course, 'course', 'tone-violet', { asTable: true, cols: payCols, help: def.course, pick: { selected: courses, toggle: toggleIn(courses, setCourses), set: setCourses } })}
         {card('Purchased grade', d?.by_grade, 'grade', 'tone-amber', { cols: payCols, help: def.grade, height: 280, pick: { selected: grades, toggle: toggleIn(grades, setGrades), set: setGrades } })}
-        {card('Lead source distribution (last touch)', d?.by_last_source, 'last_touch_source', 'tone-orange', { filterDim: 'source', asTable: true })}
+        {card('Lead source distribution (last touch)', d?.by_last_source, 'last_touch_source', 'tone-orange', { filterDim: 'source', asTable: true,
+          help: `Lead source distribution (last touch). ${def.credit ?? ''} The "+" on the App Installed row splits those users by the source of the touch BEFORE the install. ${def.app_prev ?? ''}`,
+          expand: { key: 'App Installed', rows: d?.by_app_prev_source ?? [], onPick: (key) => open(`App Installed (last touch) · touch before it: ${key}`, 'app_prev_source', key, 'paying users credited to an App Installed last touch whose touch before the install has this source · click a row for the lead record') } })}
         {card('Lead source distribution (first touch)', d?.by_first_source, 'first_touch_source', 'tone-orange', { asTable: true, help: def.first_credit })}
         {card('Staff-wise (last touch)', d?.by_last_staff, 'last_touch_staff', 'tone-pink', { filterDim: 'staff', asTable: true })}
         {card('Staff-wise (first touch)', d?.by_first_staff, 'first_touch_staff', 'tone-pink', { asTable: true, help: def.first_credit })}
@@ -145,7 +150,6 @@ export default function Converted() {
         {card('Medium wise conversion (first touch)', d?.by_first_medium, 'first_touch_medium', 'tone-green', { asTable: true, help: def.first_credit })}
         {card('Campaign wise conversion (last touch)', d?.by_last_campaign, 'last_touch_campaign', 'tone-brand', { filterDim: 'campaign', asTable: true })}
         {card('Campaign wise conversion (first touch)', d?.by_first_campaign, 'first_touch_campaign', 'tone-brand', { asTable: true, help: def.first_credit })}
-        {card('App Installed (last touch) · the touch before it', d?.by_app_prev_source, 'app_prev_source', 'tone-orange', { asTable: true, help: def.app_prev })}
         <ChartCard title="Turnaround time" tone="tone-green" help={def.tat} loading={q.isLoading} error={q.error} rows={d?.tat?.[tat]?.buckets ?? []} height={240}
           subtitle={d?.tat ? `${fmtInt(d.tat[tat].leads)} paying users · median ${d.tat[tat].median_days == null ? '–' : fmt1(d.tat[tat].median_days)} d · average ${d.tat[tat].avg_days == null ? '–' : fmt1(d.tat[tat].avg_days)} d` : 'days to the first payment'}
           actions={<Segmented size="xs" value={tat} onChange={setTat} options={[
