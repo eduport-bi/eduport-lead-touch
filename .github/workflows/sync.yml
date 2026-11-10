@@ -5,7 +5,7 @@
 name: sync
 on:
   schedule:
-    - cron: '30 4 * * *'     # once a day at 10:00 IST (04:30 UTC) - the free GitHub Actions minutes ran low with six runs a day (2026-10-17); use "Sync now" for an intraday refresh
+    - cron: '30 0 * * *'     # once a day at 06:00 IST (00:30 UTC; moved from 10:00 IST on 2026-11-10 so the day starts on fresh data) - the free GitHub Actions minutes ran low with six runs a day (2026-10-17); use "Sync now" for an intraday refresh
   workflow_dispatch:
     inputs:
       full:
