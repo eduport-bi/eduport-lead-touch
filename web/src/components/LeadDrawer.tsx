@@ -12,6 +12,7 @@ export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () =>
   const l: Record<string, unknown> = d?.lead ?? {};
   const s = (k: string) => (l[k] == null ? '–' : String(l[k]));
   const facts: [string, string][] = d ? [
+    ['Name', `${l.first_name ?? ''} ${l.last_name ?? ''}`.trim() || '–'], ['EPS ID', s('eps_id')],
     ['Created', fmtDateTime(l.created_at as string)], ['Source', s('lead_source')], ['Stage', s('lead_stage')], ['Class', `${s('class_group')} (${s('class_raw')})`],
     ['Owner', s('owner_name')], ['District / City', `${s('district')} / ${s('city')}`], ['Priority', s('priority')], ['Lead type', s('lead_type')],
     ['Mobile', s('mobile')], ['Email', s('email')],

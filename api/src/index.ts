@@ -8,7 +8,7 @@ import { savedQueryToApi } from './saved_filter';
 import { meta } from './routes/meta';
 import { filters } from './routes/filters';
 import { leads } from './routes/leads';
-import { syncRoute } from './routes/sync';
+import { syncRoute, dailySync, dailySyncDue } from './routes/sync';
 import { overview } from './routes/overview';
 import { overviewLeads } from './routes/overview_leads';
 import { newLeads } from './routes/new_leads';
@@ -152,7 +152,11 @@ export async function warmCache(env: Env, ctx: FetchCtx): Promise<{ url: string;
 
 export default {
   fetch: app.fetch,
-  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    // the daily sync at 06:00 IST (GitHub's own schedule runs hours late)
+    if (dailySyncDue(controller.scheduledTime)) {
+      ctx.waitUntil(dailySync(env, controller.scheduledTime).then((m) => console.log('daily sync:', m)).catch((e) => console.error('daily sync failed', e)));
+    }
     ctx.waitUntil(
       warmCache(env, ctx)
         .then((rows) => console.log('warm', JSON.stringify(rows)))

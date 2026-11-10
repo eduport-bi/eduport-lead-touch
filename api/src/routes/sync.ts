@@ -29,6 +29,38 @@ async function latestRun(env: Env): Promise<RunInfo | null> {
   return run ? { id: run.id, status: run.status, conclusion: run.conclusion, started_at: run.started_at ?? (run as unknown as { run_started_at: string }).run_started_at, html_url: run.html_url, event: run.event } : null;
 }
 
+const RUNNING = ['in_progress', 'queued', 'pending', 'waiting'];
+const DAILY_SYNC_HOUR_IST = 6;
+
+/** Is this cron tick (epoch ms) one of the three that may start the daily sync: 06:00, 06:10, 06:20 IST? Returns the IST day, or null. */
+export function dailySyncDue(scheduledTime: number): string | null {
+  const ist = new Date(scheduledTime + 5.5 * 3600_000);
+  return ist.getUTCHours() === DAILY_SYNC_HOUR_IST && ist.getUTCMinutes() < 30 ? ist.toISOString().slice(0, 10) : null;
+}
+
+/**
+ * The daily sync, started by the Worker's own cron (every 10 minutes, on time) at 06:00 IST. GitHub's scheduler ran the workflow
+ * 6 to 8.5 hours late every day (a 10:00 IST schedule started between 16:00 and 18:40 IST), so the schedule in sync.yml is only a
+ * fallback. The 06:00 tick dispatches; the 06:10 and 06:20 ticks retry when that failed. A KV marker per IST day makes it once a day.
+ */
+export async function dailySync(env: Env, scheduledTime: number): Promise<string> {
+  const day = dailySyncDue(scheduledTime);
+  if (!day) return 'not due';
+  if (!env.GITHUB_TOKEN) return 'not configured: GITHUB_TOKEN secret missing';
+  const key = `daily-sync:${day}`;
+  if (env.CACHE) { if (await env.CACHE.get(key)) return 'already started today'; }
+  else if (new Date(scheduledTime + 5.5 * 3600_000).getUTCMinutes() >= 10) return 'no KV marker: only the 06:00 tick dispatches';
+  const mark = async (v: string) => { if (env.CACHE) await env.CACHE.put(key, v, { expirationTtl: 2 * 86400 }); };
+  const run = await latestRun(env);
+  if (run && RUNNING.includes(run.status)) { await mark(`running ${run.id}`); return `a sync is already running (${run.id})`; }
+  const r = await gh(env, '/actions/workflows/sync.yml/dispatches', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ref: 'main', inputs: { full: false, objects: '' } }),
+  });
+  if (r.status !== 204) throw new Error(`daily sync dispatch failed: GitHub API ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  await mark('started');
+  return `started for ${day}`;
+}
+
 /** GET /api/sync/status */
 syncRoute.get('/sync/status', async (c) => {
   if (!c.env.GITHUB_TOKEN) return c.json({ data: { configured: false, run: null } });
@@ -40,7 +72,7 @@ syncRoute.get('/sync/status', async (c) => {
 syncRoute.post('/sync', async (c) => {
   const env = c.env;
   const run = await latestRun(env);
-  if (run && (run.status === 'in_progress' || run.status === 'queued' || run.status === 'pending' || run.status === 'waiting')) {
+  if (run && RUNNING.includes(run.status)) {
     return c.json({ error: { code: 'already_running', message: 'A sync is already running', run } }, 409);
   }
   const started = run?.started_at ? new Date(run.started_at).getTime() : 0;

@@ -159,11 +159,14 @@ leads.get('/leads/:id{[a-zA-Z0-9]+}', (c) =>
       t AS (
         SELECT count(*)::int AS total_touches, count(*) FILTER (WHERE m.is_pre_conversion)::int AS valid_touches,
                min(m.touch_at) AS first_touch_at, max(m.touch_at) AS last_touch_any_at
-        FROM analytics.mv_touch_flat m WHERE m.lead_id = ${id})
+        FROM analytics.mv_touch_flat m WHERE m.lead_id = ${id}),
+      -- EPS ID = the app account on the lead's phone or alternative number (the paying account first, else any account, as on the Analysis page)
+      a AS (SELECT min(cu.user_id)::int AS acct_user_id FROM l JOIN analytics.mv_user_phone cu ON cu.phone_key = l.phone_key AND l.phone_valid)
       SELECT l.*, (p.payment_count > 0) AS converted, p.converted_at::text, p.payment_count, p.revenue, p.last_payment_date::text, p.app_user_id,
+             COALESCE(p.app_user_id, a.acct_user_id) AS eps_id,
              (p.converted_at - l.created_date) AS days_to_convert, (p.converted_at < l.created_date) AS pre_existing_customer,
              t.total_touches, t.valid_touches, t.first_touch_at::text, t.last_touch_any_at::text
-      FROM l CROSS JOIN p CROSS JOIN t`;
+      FROM l CROSS JOIN p CROSS JOIN t CROSS JOIN a`;
     const [leadRows, touches, ics, payments, calls, siblings] = await Promise.all([
       leadQ,
       // this lead's touches straight from the touch table (index on lead + date); sequence, gaps and credits computed over these rows only
