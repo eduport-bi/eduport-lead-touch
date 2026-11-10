@@ -13,6 +13,7 @@ import { requireAdmin } from '../auth';
  *
  *   GET  /export/status          { configured, updated_at, updated_by }        any signed-in user
  *   PUT  /export/password        { password }                                   admin
+ *   GET  /export/password        { configured, password | null }                admin: the current password, to hand it to a colleague
  *   POST /export/verify          { password } -> { ok }                         any signed-in user (401 when wrong)
  *   requireExportPassword        middleware for the *.csv routes (index.ts)
  * Successful and failed checks are written to app_auth.audit, so admins can see who exported what.
@@ -21,6 +22,9 @@ export const exportRoutes = new Hono<AppEnv>();
 exportRoutes.use('/export/*', async (c, next) => { c.header('Cache-Control', 'no-store'); await next(); });
 
 const KEY = 'export_password';
+// A readable copy next to the hash, so an admin can look the shared password up instead of resetting it for everybody (user request,
+// 2026-11-10). It is a shared gate, not a personal login: admins can already replace it. Checks still run against the hash only.
+const KEY_PLAIN = 'export_password_plain';
 export const EXPORT_HEADER = 'x-export-password';
 const Pw = z.object({ password: z.string().min(1).max(128) });
 
@@ -56,10 +60,25 @@ exportRoutes.put('/export/password', requireAdmin, async (c) => {
   try {
     await sql`INSERT INTO app_auth.settings (key, value, updated_at, updated_by) VALUES (${KEY}, ${hash}, now(), ${me.email})
               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by`;
+    await sql`INSERT INTO app_auth.settings (key, value, updated_at, updated_by) VALUES (${KEY_PLAIN}, ${parsed.data.password}, now(), ${me.email})
+              ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by`;
     await sql`INSERT INTO app_auth.audit (actor, action, target) VALUES (${me.email}, 'set_export_password', 'csv exports')`;
   } finally { release(sql, c.executionCtx); }
   hashMem = null;
   return c.json({ data: { ok: true } });
+});
+
+/** The current password, for admins. null when it was set before the readable copy existed (or the copy does not match the hash): set it once more. */
+exportRoutes.get('/export/password', requireAdmin, async (c) => {
+  const me = c.get('user');
+  const rows = await withSql(c.env, c.executionCtx, (sql) => sql<{ key: string; value: string | null }[]>`
+    SELECT key, value FROM app_auth.settings WHERE key IN (${KEY}, ${KEY_PLAIN})`);
+  const hash = rows.find((r) => r.key === KEY)?.value ?? null;
+  const plain = rows.find((r) => r.key === KEY_PLAIN)?.value ?? null;
+  if (!hash) return c.json({ data: { configured: false, password: null } });
+  const ok = !!plain && (await verifyPassword(plain, hash));
+  c.executionCtx.waitUntil(audit(c, me.email, 'view_export_password', 'csv exports', ok ? null : 'not viewable: set before passwords were kept'));
+  return c.json({ data: { configured: true, password: ok ? plain : null } });
 });
 
 /** Shared check used by the verify endpoint and the middleware. */

@@ -17,6 +17,10 @@ export default function Access() {
   const [modal, setModal] = useState<{ kind: 'new' } | { kind: 'password'; row: Row } | { kind: 'export' } | null>(null);
   const [exp, setExp] = useState<{ configured: boolean; updated_at: string | null; updated_by: string | null } | null>(null);
   const loadExport = async () => { try { setExp(await authCall('/export/status')); } catch { /* shown as unknown */ } };
+  // the current export password, fetched only when an admin asks to see it (the view is written to the activity list)
+  const [expPw, setExpPw] = useState<{ password: string | null } | { error: string } | null>(null);
+  const [expCopied, setExpCopied] = useState(false);
+  const showExport = async () => { try { const r = await authCall<{ configured: boolean; password: string | null }>('/export/password'); setExpPw({ password: r.password }); load(); } catch (x) { setExpPw({ error: (x as Error).message }); } };
   // can passwords be e-mailed? (RESEND_API_KEY + MAIL_FROM on the Worker)
   const [mail, setMail] = useState<{ configured: boolean; from: string | null } | null>(null);
   const loadMail = async () => { try { setMail(await authCall('/auth/mail/status')); } catch { setMail({ configured: false, from: null }); } };
@@ -103,8 +107,22 @@ export default function Access() {
               {exp === null ? ' Checking…' : exp.configured ? <> Set {fmtDateTime(exp.updated_at)}{exp.updated_by ? ` by ${exp.updated_by}` : ''}.</> : <b className="text-red-600"> Not set yet: all CSV downloads are refused until you set one.</b>}
             </div>
           </div>
-          <button className={`btn ${exp && !exp.configured ? 'btn-primary' : ''}`} onClick={() => setModal({ kind: 'export' })}>{exp?.configured ? 'Change export password' : 'Set export password'}</button>
+          <div className="flex flex-wrap items-center gap-2">
+            {exp?.configured && (expPw === null
+              ? <button className="btn" onClick={showExport} title="Show the current export password (the view is written to the activity list)">Show password</button>
+              : <button className="btn" onClick={() => { setExpPw(null); setExpCopied(false); }}>Hide password</button>)}
+            <button className={`btn ${exp && !exp.configured ? 'btn-primary' : ''}`} onClick={() => setModal({ kind: 'export' })}>{exp?.configured ? 'Change export password' : 'Set export password'}</button>
+          </div>
         </div>
+        {expPw && 'error' in expPw && <div className="mt-2 text-xs text-red-600">{expPw.error}</div>}
+        {expPw && 'password' in expPw && (expPw.password
+          ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-ink-3">Current password</span>
+              <code className="rounded border border-line bg-surface-2 px-2 py-1 font-mono text-[13px]">{expPw.password}</code>
+              <button className="btn !py-0.5" onClick={() => { navigator.clipboard?.writeText(expPw.password!).then(() => setExpCopied(true)).catch(() => undefined); }}>{expCopied ? 'Copied' : 'Copy'}</button>
+            </div>)
+          : <div className="mt-2 text-xs text-ink-2">This password was set before the dashboard could show it, and it is stored only as a one-way hash, so it cannot be read back. Use <b>Change export password</b> once: from then on the current password can be shown here.</div>)}
       </div>
 
       <div className="card">
@@ -120,7 +138,7 @@ export default function Access() {
       </div>
 
             {modal?.kind === 'new' && <NewAccount mail={mail} onClose={() => setModal(null)} onDone={(email, r, wanted) => { setModal(null); load(); mailResult(`Account created for ${email}`, email, r, wanted); }} />}
-      {modal?.kind === 'export' && <SetExportPassword onClose={() => setModal(null)} onDone={() => { setModal(null); loadExport(); load(); }} />}
+      {modal?.kind === 'export' && <SetExportPassword onClose={() => setModal(null)} onDone={() => { setModal(null); setExpPw(null); setExpCopied(false); loadExport(); load(); }} />}
       {modal?.kind === 'password' && <SetPassword row={modal.row} self={modal.row.id === me.id} mail={mail} onClose={() => setModal(null)} onDone={(r, wanted) => { setModal(null); load(); mailResult(`Password set for ${modal.row.email}`, modal.row.email, r, wanted); }} />}
     </div>
   );
