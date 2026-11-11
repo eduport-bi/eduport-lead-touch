@@ -59,13 +59,13 @@ Also ask: **is the DB reachable from the internet?** GitHub Actions runs on publ
 
 ## 4. GitHub – push the code and store the secrets (10 min)
 
-4.1 Go to https://github.com/new. Owner: `vishnudaspeduport-a11y`. Name: `eduport-lead-touch`. **Private**. Do NOT add a README. Click **Create repository**.
+4.1 Go to https://github.com/new. Owner: `eduport-bi` (the GitHub organisation; the repository was moved there from the personal account on 2026-11-11). Name: `eduport-lead-touch`. **Private**. Do NOT add a README. Click **Create repository**.
 4.2 On your PC, open a terminal in this project folder and run:
 ```bash
 git init -b main
 git add -A
 git commit -m "Lead Touch analytics: SQL, sync, Worker API, React app"
-git remote add origin https://github.com/vishnudaspeduport-a11y/eduport-lead-touch.git
+git remote add origin https://github.com/eduport-bi/eduport-lead-touch.git
 git push -u origin main
 ```
 (If git asks you to log in, use your GitHub username and a Personal Access Token as the password.)
@@ -135,7 +135,7 @@ psql "postgresql://lt_analytics_owner.PROJECT_REF:OWNER_PASSWORD@aws-0-ap-south-
 ### Alternative if the production DB is not reachable from GitHub
 Run the sync on any company server that can reach both the internet and the production DB:
 ```bash
-git clone https://github.com/vishnudaspeduport-a11y/eduport-lead-touch.git && cd eduport-lead-touch/sync
+git clone https://github.com/eduport-bi/eduport-lead-touch.git && cd eduport-lead-touch/sync
 cp .env.example .env      # fill in the same values as the GitHub secrets
 npm install && npm run sync:full
 crontab -e                # add:  */30 * * * * cd /path/eduport-lead-touch/sync && npm run sync >> sync.log 2>&1
