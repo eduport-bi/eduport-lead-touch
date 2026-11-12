@@ -47,7 +47,7 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
         </>}
 
 
-        {/* quick pickers: Class (grouped: SSLC -> Class 10, Class 11 / 12 split by stream (Science / Commerce / Humanities / no stream), CUET -> Class 12 (no stream), repeaters -> Repeater ...), Touch point, Lead source, Campaign */}
+        {/* quick pickers: Class (grouped, sql/050: Class 7 / 8 / 9 / 10 split CBSE vs Board (state syllabus, Malayalam + English medium), SSLC -> Class 10, Class 11 / 12 split by stream (Science / Commerce / Humanities / no stream) plus CBSE where recorded, CUET -> Class 12 (no stream), repeaters -> Repeater ...), Touch point, Lead source, Campaign */}
         {QUICK.map((qk) => { const v = f.lists[qk.key] ?? []; return (
           <button key={qk.key} className={`btn max-w-[240px] ${v.length ? 'border-accent/40 text-accent' : ''}`} title={`Filter by ${qk.label.toLowerCase()} (multi-select)`} onClick={() => setOpenDim(qk.key)}>
             <span className="text-ink-3">{qk.label}</span> <span className="truncate">{v.length === 0 ? 'All' : v.length <= 2 ? v.join(', ') : `${v.length} selected`}</span> <Icon.Chevron open />
