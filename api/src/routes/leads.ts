@@ -11,7 +11,7 @@ const SORTABLE: Record<string, string> = {
   created_at: 'created_at', lead_name: 'lead_name', lead_source: 'lead_source', lead_stage: 'lead_stage', class_group: 'class_group',
   owner_name: 'owner_name', total_touches: 'total_touches', valid_touches: 'valid_touches', converted_at: 'converted_at',
   revenue: 'revenue', days_to_convert: 'days_to_convert', first_touch_at: 'first_touch_at', last_touch_any_at: 'last_touch_any_at',
-  response_hours: 'response_hours', district: 'district', priority: 'priority',
+  response_hours: 'response_hours', district: 'district', priority: 'priority', last_call_at: 'last_call_at', calls: 'calls',
 };
 
 const LIST_COLS = sql_cols([
@@ -20,6 +20,7 @@ const LIST_COLS = sql_cols([
   'is_paid_lead', 'total_touches', 'valid_touches', 'touch_bucket', 'first_touch_at', 'first_touch_point', 'first_touch_source', 'last_touch_at',
   'last_touch_point', 'last_touch_any_at', 'response_hours', 'converted', 'converted_at', 'days_to_convert', 'pre_existing_customer', 'revenue',
   'payment_count', 'best_ic_status', 'lm_reason', 'sf_is_converted', 'sf_touch_count', 'is_open',
+  'calls', 'last_call_at', 'last_call_reason',   // last call (salesforce.lead_calls: the Salesforce call log since May 2026), 2026-11-24
 ]);
 function sql_cols(cols: string[]) { return cols; }
 
@@ -47,6 +48,9 @@ function explorerQuery(sql: Sql, where: Frag, sortCol: string, dirIn: Frag, page
                               FROM analytics.mv_touch_flat t GROUP BY t.lead_id) ta ON ta.lead_id = l.lead_id`;
     sortExpr = sortCol === 'total_touches' ? sql`COALESCE(ta.total_touches, 0)` : sortCol === 'valid_touches' ? sql`COALESCE(ta.valid_touches, 0)`
       : sortCol === 'response_hours' ? sql`EXTRACT(epoch FROM ta.first_touch_at - l.created_at)` : sql`ta.${sql(sortCol)}`;
+  } else if (sortCol === 'last_call_at' || sortCol === 'calls') {
+    sortJoin = sql`LEFT JOIN salesforce.lead_calls lc ON lc.lead_id = l.lead_id`;
+    sortExpr = sortCol === 'calls' ? sql`COALESCE(lc.calls, 0)` : sql`lc.last_call_at`;
   } else {
     sortJoin = sql`LEFT JOIN (SELECT vp.phone_key, min(vp.payment_date) AS converted_at, sum(vp.amount) AS revenue
                               FROM analytics.v_valid_payment_x vp WHERE vp.phone_key IS NOT NULL GROUP BY vp.phone_key) pay ON pay.phone_key = l.phone_key`;
@@ -67,8 +71,10 @@ function explorerQuery(sql: Sql, where: Frag, sortCol: string, dirIn: Frag, page
            round((EXTRACT(epoch FROM ta.first_touch_at - s.created_at) / 3600)::numeric, 2) AS response_hours,
            (COALESCE(pay.payment_count, 0) > 0) AS converted, pay.converted_at, (pay.converted_at - s.created_date)::int AS days_to_convert,
            (pay.converted_at < s.created_date) AS pre_existing_customer, COALESCE(pay.revenue, 0) AS revenue, COALESCE(pay.payment_count, 0) AS payment_count,
-           (COALESCE(pay.payment_count, 0) = 0 AND s.lead_stage NOT IN ('Converted', 'Disqualified')) AS is_open
+           (COALESCE(pay.payment_count, 0) = 0 AND s.lead_stage NOT IN ('Converted', 'Disqualified')) AS is_open,
+           COALESCE(lc.calls, 0) AS calls, lc.last_call_at, lc.last_reason AS last_call_reason
     FROM (${rows}) s
+    LEFT JOIN salesforce.lead_calls lc ON lc.lead_id = s.lead_id
     LEFT JOIN LATERAL (
       SELECT count(*)::int AS total_touches, count(*) FILTER (WHERE t.is_pre_conversion)::int AS valid_touches,
              min(t.touch_at) AS first_touch_at, max(t.touch_at) FILTER (WHERE t.is_pre_conversion) AS last_touch_at, max(t.touch_at) AS last_touch_any_at,

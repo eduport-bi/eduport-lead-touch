@@ -3,7 +3,7 @@ import type { Sql } from 'postgres';
 import type { AppEnv, Role } from '../env';
 import { handle, intParam, maskEmail, maskName, maskPhone, csvStream } from '../http';
 import { parseFilters, resolvePeriods, icCourseIn, type Filters, type Frag, type Period } from '../filters';
-import { flatWhere, FLAT_COLS, convCond, convFirstCond, tatBucket, activityBucket, activityDays } from './overview';
+import { flatWhere, FLAT_COLS, convCond, convAfterCond, convBeforeCond, tatBucket, activityBucket, activityDays } from './overview';
 import { paymentPeriod } from '../filters';
 
 /**
@@ -116,9 +116,10 @@ function metricHaving(sql: Sql, metric: Metric, p: Period, f?: Filters, q: Recor
     case 'first_touch': return sql`bool_or(t.tab_is_first_touch AND ${conv})`;
     case 'last_touch': return sql`bool_or(t.tab_is_last_touch AND ${conv})`;
     // Total converted: first valid payment on/after a touch AND not before the window start (same rule as the Overview KPI)
-    case 'converted_first': return sql`bool_or(${f ? convFirstCond(sql, f) : sql`(t.converted AND t.is_pre_conversion)`} AND t.converted_at >= ${(f && paymentPeriod(f))?.from ?? p.from})`;
+    // (purchased class: the date of the payment for the picked class, see overview.ts convAfterCond / convBeforeCond)
+    case 'converted_first': return f ? sql`bool_or(${convAfterCond(sql, f, paymentPeriod(f)?.from ?? p.from)})` : sql`bool_or(t.converted AND t.is_pre_conversion AND t.converted_at >= ${p.from})`;
     // already a customer when the window started: first valid payment before the window start (payment window when it is on)
-    case 'converted_before': return sql`bool_or(t.converted AND t.converted_at < ${(f && paymentPeriod(f))?.from ?? p.from})`;
+    case 'converted_before': return f ? sql`bool_or(${convBeforeCond(sql, f, paymentPeriod(f)?.from ?? p.from)})` : sql`bool_or(t.converted AND t.converted_at < ${p.from})`;
     case 'sf_converted': return sql`bool_or(t.lead_sf_is_converted)`;
     case 'stage_conv_unpaid': return sql`max(t.lead_stage) = 'Converted' AND NOT bool_or(t.converted)`;
     case 'stage_react': return sql`max(t.lead_stage) IN ('Not Willing Now', 'Disqualified', 'Not Connected', 'P2 Completed')

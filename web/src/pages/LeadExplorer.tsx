@@ -8,7 +8,7 @@ import { Icon, Note, PageHeader, Skeleton, useDebounce } from '../components/ui'
 import { LeadDrawer } from '../components/LeadDrawer';
 import { useExportGate } from '../lib/exportGate';
 
-const SORTS = [['created_at', 'Created'], ['converted_at', 'Converted at'], ['revenue', 'Revenue'], ['total_touches', 'Touches'], ['days_to_convert', 'Days to convert'], ['response_hours', 'Response time'], ['last_touch_any_at', 'Last touch'], ['lead_name', 'Name']];
+const SORTS = [['created_at', 'Created'], ['last_call_at', 'Last call'], ['calls', 'Calls'],['converted_at', 'Converted at'], ['revenue', 'Revenue'], ['total_touches', 'Touches'], ['days_to_convert', 'Days to convert'], ['response_hours', 'Response time'], ['last_touch_any_at', 'Last touch'], ['lead_name', 'Name']];
 
 export default function LeadExplorer() {
   const requestExport = useExportGate();
@@ -42,6 +42,7 @@ export default function LeadExplorer() {
           columns={[
             { key: 'lead_name', header: 'Lead' }, { key: 'created_at', header: 'Created', render: (v) => fmtDateTime(v as string) }, { key: 'first_name', header: 'Name' }, { key: 'mobile', header: 'Mobile' },
             { key: 'lead_source', header: 'Source' }, { key: 'lead_stage', header: 'Stage' }, { key: 'class_group', header: 'Class' }, { key: 'district', header: 'District' }, { key: 'owner_name', header: 'Owner' },
+            { key: 'last_call_at', header: 'Last call', render: (v) => fmtDateTime(v as string) }, { key: 'last_call_reason', header: 'Last call reason' }, { key: 'calls', header: 'Calls' },
             { key: 'total_touches', header: 'Touches' }, { key: 'valid_touches', header: 'Pre-pay touches' }, { key: 'first_touch_point', header: 'First touch' }, { key: 'last_touch_point', header: 'Last touch' },
             { key: 'response_hours', header: 'Response (h)' }, { key: 'converted', header: 'Conv.', render: (v) => (v ? '✓' : '') }, { key: 'converted_at', header: 'Converted at' }, { key: 'days_to_convert', header: 'Days' },
             { key: 'revenue', header: 'Revenue', render: (v) => fmtINRfull(v as number) }, { key: 'priority', header: 'Priority' }, { key: 'best_ic_status', header: 'IC status' },

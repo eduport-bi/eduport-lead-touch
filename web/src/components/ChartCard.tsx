@@ -19,6 +19,8 @@ export interface ChartCardProps<Row extends object> {
   emptyHint?: string;
   actions?: ReactNode;                // extra controls (segmented, selects)
   height?: number;
+  /** size the body to its content once loaded (no empty space under a table-like chart); `height` is then only the loading height */
+  fitContent?: boolean;
   className?: string;
   children: ReactNode;                // the chart
   fileName?: string;
@@ -101,7 +103,7 @@ export function ChartCard<Row extends object>(p: ChartCardProps<Row>) {
           </Popover>}
         </div>
       </header>
-      <div ref={ref} className="relative min-h-0 overflow-hidden" style={{ height: h, flex: `1 1 ${h}px` }}>{body()}</div>
+      <div ref={ref} className="relative min-h-0 overflow-hidden" style={p.fitContent && !p.loading && !table ? {} : { height: h, flex: `1 1 ${h}px` }}>{body()}</div>
     </section>
   );
 }

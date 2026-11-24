@@ -89,7 +89,8 @@ analysis.post('/analysis/phones', async (c) => {
              tch.touch_points, tch.campaigns,
              floor(EXTRACT(epoch FROM now() - tch.last_touch_at) / 86400)::int AS days_since_last_touch,
              act.at::text AS last_activity_at, act.kind AS last_activity_type, floor(EXTRACT(epoch FROM now() - act.at) / 86400)::int AS days_since_activity,
-             lm.at::text AS lm_last_activity_at, icx.at::text AS ic_last_activity_at
+             lm.at::text AS lm_last_activity_at, icx.at::text AS ic_last_activity_at,
+             lcall.last_call_at::text AS last_call_at, lcall.last_reason AS last_call_reason, COALESCE(lcall.calls, 0) AS calls   -- 2026-11-24
       FROM p
       LEFT JOIN leads ON leads.phone_key = p.phone_key
       LEFT JOIN pay ON pay.phone_key = p.phone_key
@@ -98,6 +99,7 @@ analysis.post('/analysis/phones', async (c) => {
       LEFT JOIN act ON act.lead_id = leads.lead_id
       LEFT JOIN lm ON lm.lead_id = leads.lead_id
       LEFT JOIN icx ON icx.lead_id = leads.lead_id
+      LEFT JOIN salesforce.lead_calls lcall ON lcall.lead_id = leads.lead_id
       ORDER BY p.phone_key, leads.created_at DESC NULLS LAST`;
     return c.json({ data: { rows: rows.map((r) => maskRow(r, role)), phones: phones.length, masked: role === 'viewer' } }, 200, { 'Cache-Control': 'private, no-store' });
   } finally {

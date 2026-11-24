@@ -6,7 +6,7 @@ import { fmtDateTime } from '../lib/format';
 interface Run { id: number; status: string; conclusion: string | null; started_at: string; html_url: string; event: string }
 interface Status { configured: boolean; run: Run | null }
 
-/** "Sync now": starts the GitHub Actions sync (Salesforce + payments -> Supabase -> views) and shows its progress. */
+/** "Sync now": starts the GitHub Actions sync (Salesforce + payments -> Supabase -> views) and shows its progress. Admins only (AppShell, api/src/routes/sync.ts). */
 export function SyncButton() {
   const qc = useQueryClient();
   const [status, setStatus] = useState<Status | null>(null);

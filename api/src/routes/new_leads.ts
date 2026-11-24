@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Sql } from 'postgres';
 import type { AppEnv, Role } from '../env';
 import { handle, intParam, maskEmail, maskName, maskPhone, csvStream } from '../http';
-import { parseFilters, resolvePeriods, paymentPeriod, inList, andAll, isLeadDim, LEAD_DIMS, LIST_KEYS, icCourseIn, type Filters, type Frag, type Period } from '../filters';
+import { parseFilters, resolvePeriods, paymentPeriod, inList, andAll, isLeadDim, LEAD_DIMS, LIST_KEYS, icCourseIn, boughtBases, classPaid, classPopulation, type Filters, type Frag, type Period } from '../filters';
 import { FLAT_COLS } from './overview';
 
 /**
@@ -77,6 +77,8 @@ export function newLeadWhere(sql: Sql, f: Filters, p: Period | null, opts: { val
       if (real.length) c.push(icCourseIn(sql, 'l', real));
       continue;
     }
+    const bb = k === 'class_group' ? boughtBases(f) : null;   // purchased class: the lead paid for that class (filters.ts)
+    if (bb) { c.push(classPopulation(sql, sql`l.lead_id`, f, bb)); continue; }
     if (isLeadDim(k)) {
       const col = LEAD_DIMS[k].col;
       if (LEAD_CONV_COLS.has(col)) c.push(inList(sql, 'l', col, vals));
@@ -101,6 +103,13 @@ function dimCond(sql: Sql, q: Record<string, string>, f?: Filters, p?: Period | 
     const fp = sql`(SELECT min(vp.payment_date) FROM analytics.v_valid_payment_x vp WHERE vp.phone_key = l.phone_key)`;
     const noTouch = sql`l.phone_valid AND NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id)`;
     const pp = f ? paymentPeriod(f) : null; const winFrom = pp?.from ?? p?.from ?? '1900-01-01';
+    // purchased class: the date of the payment for the picked class (same rule as the Overview tiles)
+    const bb = f ? boughtBases(f) : null;
+    if (bb) {
+      return value === 'before'
+        ? sql`(${noTouch} AND ${classPaid(sql, sql`l.lead_id`, bb, sql`cp.payment_date < ${winFrom}`)})`
+        : sql`(${noTouch} AND ${classPaid(sql, sql`l.lead_id`, bb, sql`cp.payment_date >= l.created_date AND cp.payment_date >= ${winFrom} ${pp ? sql`AND cp.payment_date BETWEEN ${pp.from} AND ${pp.to}` : sql``}`)})`;
+    }
     if (value === 'before') return sql`(${noTouch} AND ${fp} < ${winFrom})`;
     return pp ? sql`(${noTouch} AND ${fp} >= l.created_date AND ${fp} BETWEEN ${pp.from} AND ${pp.to})` : sql`(${noTouch} AND ${fp} >= l.created_date AND ${fp} >= ${winFrom})`;
   }
@@ -165,8 +174,13 @@ const COLS = [
   'calls', 'first_call_at', 'last_call_at', 'last_call_reason', 'last_call_status',
 ];
 
+/** list / summary WHERE */
+function listWhere(sql: Sql, f: Filters, p: Period, q: Record<string, string>): Frag {
+  return sql`${newLeadWhere(sql, f, p, { scope: q.scope })} AND ${dimCond(sql, q, f, p)} AND ${searchCond(sql, q.q ?? '')}`;
+}
+
 function leadQuery(sql: Sql, f: Filters, p: Period, q: Record<string, string>, page: { limit: number; offset: number } | null) {
-  const where = sql`${newLeadWhere(sql, f, p, { scope: q.scope })} AND ${dimCond(sql, q, f, p)} AND ${searchCond(sql, q.q ?? '')}`;
+  const where = listWhere(sql, f, p, q);
   const sortCol = SORTABLE[q.sort ?? ''] ?? 'created_at';
   const dir = q.dir === 'asc' ? sql`ASC NULLS FIRST` : sql`DESC NULLS LAST`;
   const base = sql`
@@ -226,7 +240,7 @@ const SPLITS: { dim: string; label: string; kind: 'lead' | 'touch' | 'pay' }[] =
 
 newLeads.get('/overview/new_leads/summary', (c) =>
   handle(c, async ({ sql, f, periods, q }) => {
-    const where = sql`${newLeadWhere(sql, f, periods.current, { scope: q.scope })} AND ${dimCond(sql, q, f, periods.current)} AND ${searchCond(sql, q.q ?? '')}`;
+    const where = listWhere(sql, f, periods.current, q);
     const pp = paymentPeriod(f);
     const payWin = pp ? sql`AND hp.payment_date BETWEEN ${pp.from} AND ${pp.to}` : sql``;
     const rows = await sql<{ dim: string; key: string | null; leads: number; revenue: number | null }[]>`

@@ -52,6 +52,8 @@ export interface FilterState {
   /** optional second window on the PAYMENT date; conversions are counted only for payments inside it */
   pay: boolean; pfrom: string; pto: string;
   converted: boolean; dups: boolean; paid?: 'paid' | 'organic';
+  /** what a picked Class means: the Class on the Salesforce lead, or a class the lead's number paid for (2026-11-23) */
+  classOn: 'lead' | 'bought';
   lists: Partial<Record<ListDim, string[]>>;
   flags: Partial<Record<'hot' | 'supreme_hot' | 'relogged' | 'repeat' | 'pre_existing', '1' | '0'>>;
 }
@@ -100,7 +102,7 @@ function parse(sp: URLSearchParams): FilterState {
     preset, basis: ((sp.get('basis') as Basis) === 'touch' ? 'touch' : 'created'), compare: sp.get('compare') === 'previous',
     pay: sp.get('pay') === '1', pfrom: sp.get('pfrom') ?? (preset === 'custom' ? sp.get('from') ?? df : df), pto: sp.get('pto') ?? (preset === 'custom' ? sp.get('to') ?? dt : dt),
     converted: sp.get('converted') === '1', dups: sp.get('dups') === '1',
-    paid: paid === 'paid' || paid === 'organic' ? paid : undefined, lists, flags,
+    paid: paid === 'paid' || paid === 'organic' ? paid : undefined, lists, flags, classOn: sp.get('class_on') === 'bought' ? 'bought' : 'lead',
   };
 }
 
@@ -114,6 +116,7 @@ function serialize(f: FilterState): URLSearchParams {
   if (f.converted) sp.set('converted', '1');
   if (f.dups) sp.set('dups', '1');
   if (f.paid) sp.set('paid', f.paid);
+  if (f.classOn === 'bought') sp.set('class_on', 'bought');
   for (const [k, v] of Object.entries(f.lists)) if (v?.length) sp.set(k, v.map(encodeListValue).join(','));
   for (const [k, v] of Object.entries(f.flags)) if (v) sp.set(k, v);
   return sp;
@@ -126,6 +129,8 @@ export function toApiParams(f: FilterState): Record<string, string> {
   if (f.converted) o.converted = '1';
   if (f.dups) o.dups = '1';
   if (f.paid) o.paid = f.paid;
+  // sent only when it changes something (a Class is picked), so every other request keeps its cache key
+  if (f.classOn === 'bought' && f.lists.class_group?.length) o.class_on = 'bought';
   for (const [k, v] of Object.entries(f.lists)) if (v?.length) o[k] = v.map(encodeListValue).join(',');
   for (const [k, v] of Object.entries(f.flags)) if (v) o[k] = v;
   return o;

@@ -144,8 +144,14 @@ export function Lines({ data, xKey, lines, format = fmtPct, yLabel }: { data: Re
 }
 
 // ---------------------------------------------------------------- heatmap (CSS grid, sequential blue)
-export function Heatmap({ rows, cols, get, format = fmtInt, rowLabel, colLabel, onClick, cellTitle }: {
+export function Heatmap({ rows, cols, get, format = fmtInt, rowLabel, colLabel, onClick, cellTitle, mark, colText, verticalCols }: {
   rows: string[]; cols: string[]; get: (r: string, c: string) => number | null; format?: (v: number) => string; rowLabel?: string; colLabel?: string; onClick?: (r: string, c: string) => void; cellTitle?: (r: string, c: string, v: number | null) => string;
+  /** shorter text for a column header (the full name stays in its tooltip) */
+  colText?: (c: string) => string;
+  /** write the column headers vertically, full names (many long columns, e.g. the class matrix) */
+  verticalCols?: boolean;
+  /** cells to outline (e.g. the diagonal of a lead class vs purchased class matrix) */
+  mark?: (r: string, c: string) => boolean;
 }) {
   const { dark } = useTheme();
   let max = 0;
@@ -153,26 +159,32 @@ export function Heatmap({ rows, cols, get, format = fmtInt, rowLabel, colLabel, 
   return (
     <div className="h-full overflow-auto text-[10px]">
       {colLabel && <div className="mb-1 text-ink-3">{colLabel} →</div>}
-      <div className="grid gap-[2px]" style={{ gridTemplateColumns: `minmax(70px,auto) repeat(${cols.length}, minmax(26px, 1fr))` }}>
-        <div className="text-ink-3">{rowLabel}</div>
-        {cols.map((c) => <div key={c} className="truncate text-center text-ink-3" title={c}>{c}</div>)}
+      <div className="grid gap-[2px]" style={{ gridTemplateColumns: `${verticalCols ? 'max-content' : 'minmax(70px,auto)'} repeat(${cols.length}, minmax(${verticalCols ? 30 : 38}px, 1fr))` }}>
+        <div className="flex items-end text-ink-3">{rowLabel}</div>
+        {/* column names: written vertically (bottom to top) when asked, so long names such as "Class 11 Science CBSE" stay whole and
+            readable in a narrow column; otherwise they wrap. Never cut. */}
+        {cols.map((c) => verticalCols
+          ? <div key={c} className="flex min-w-0 items-end justify-center pb-1" title={c}>
+              <span className="whitespace-nowrap text-[11px] font-medium text-ink-2 [transform:rotate(180deg)] [writing-mode:vertical-rl]">{colText ? colText(c) : c}</span>
+            </div>
+          : <div key={c} className="flex min-w-0 items-end justify-center pb-0.5 text-center leading-tight text-ink-3 [overflow-wrap:anywhere]" title={c}>{colText ? colText(c) : c}</div>)}
         {rows.map((r) => (
-          <RowCells key={r} r={r} cols={cols} get={get} max={max} dark={dark} format={format} onClick={onClick} cellTitle={cellTitle} />
+          <RowCells key={r} r={r} cols={cols} get={get} max={max} dark={dark} format={format} onClick={onClick} cellTitle={cellTitle} mark={mark} fullLabel={verticalCols} />
         ))}
       </div>
     </div>
   );
 }
-function RowCells({ r, cols, get, max, dark, format, onClick, cellTitle }: { r: string; cols: string[]; get: (r: string, c: string) => number | null; max: number; dark: boolean; format: (v: number) => string; onClick?: (r: string, c: string) => void; cellTitle?: (r: string, c: string, v: number | null) => string }) {
+function RowCells({ r, cols, get, max, dark, format, onClick, cellTitle, mark, fullLabel }: { r: string; cols: string[]; get: (r: string, c: string) => number | null; max: number; dark: boolean; format: (v: number) => string; onClick?: (r: string, c: string) => void; cellTitle?: (r: string, c: string, v: number | null) => string; mark?: (r: string, c: string) => boolean; fullLabel?: boolean }) {
   return (
     <>
-      <div className="truncate pr-1 text-ink-2" title={r}>{r}</div>
+      <div className={`${fullLabel ? 'whitespace-nowrap text-[11px] font-medium' : 'truncate'} pr-2 text-ink-2`} title={r}>{r}</div>
       {cols.map((c) => {
         const v = get(r, c);
         const t = v == null || !max ? NaN : v / max;
         return (
           <div key={c} title={cellTitle ? cellTitle(r, c, v) : `${r} × ${c}: ${v == null ? '–' : format(v)}`} onClick={() => onClick?.(r, c)}
-            className={`flex h-5 items-center justify-center rounded-sm tabular-nums ${onClick ? 'cursor-pointer' : ''}`}
+            className={`flex h-5 items-center justify-center rounded-sm tabular-nums ${onClick ? 'cursor-pointer' : ''} ${mark?.(r, c) ? 'font-bold ring-2 ring-inset ring-ink/60' : ''}`}
             style={{ background: seqColor(t, dark), color: Number.isNaN(t) ? (dark ? '#898781' : '#898781') : seqInk(t) }}>
             {v == null ? '' : format(v)}
           </div>

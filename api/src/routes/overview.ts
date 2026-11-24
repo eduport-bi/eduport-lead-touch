@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Sql } from 'postgres';
 import type { AppEnv } from '../env';
 import { handle, pct, timedAll } from '../http';
-import { LIST_KEYS, paymentPeriod, icCourseExpr, icCourseIn, type Filters, type Frag, type Period } from '../filters';
+import { LIST_KEYS, paymentPeriod, icCourseExpr, icCourseIn, boughtBases, classPaid, classPopulation, type Filters, type Frag, type Period } from '../filters';
 import { newLeadWhere } from './new_leads';
 
 /**
@@ -31,7 +31,13 @@ export const FLAT_COLS: Partial<Record<(typeof LIST_KEYS)[number], string>> = {
 // OR an Interested Course status change (mv_lead_decision.lm_since / mv_ic_decision.ic_since, sql/045) on/after the lead's FIRST touch IN THE
 // SELECTION (filters decide: campaign filter = that campaign's touch).
 
+// Purchased class (filter-bar switch class_on=bought with a Class picked, 2026-11-23): every conversion rule below tests the date of the
+// payment FOR THAT CLASS (analytics.mv_lead_class_pay, sql/051) instead of the lead's first payment of any course. See filters.ts boughtBases.
+const payWin = (sql: Sql, f: Filters) => { const pp = paymentPeriod(f); return pp ? sql`AND cp.payment_date BETWEEN ${pp.from} AND ${pp.to}` : sql``; };
+
 export function convCond(sql: Sql, f: Filters): Frag {
+  const bb = boughtBases(f);
+  if (bb) return classPaid(sql, sql`t.lead_id`, bb, sql`cp.payment_date >= t.touch_date ${payWin(sql, f)}`);
   const pp = paymentPeriod(f);
   if (!pp) return sql`t.tab_converted`;
   return sql`EXISTS (SELECT 1 FROM analytics.v_payment_all hp WHERE hp.user_id = t.app_user_id AND hp.payment_method = 0 AND hp.deleted = false
@@ -40,8 +46,22 @@ export function convCond(sql: Sql, f: Filters): Frag {
 }
 /** first valid payment on/after a touch (brief definition), within the payment window when it is on */
 export function convFirstCond(sql: Sql, f: Filters): Frag {
+  const bb = boughtBases(f);
+  if (bb) return classPaid(sql, sql`t.lead_id`, bb, sql`cp.payment_date >= t.touch_date ${payWin(sql, f)}`);
   const pp = paymentPeriod(f);
   return pp ? sql`(t.converted AND t.is_pre_conversion AND t.converted_at BETWEEN ${pp.from} AND ${pp.to})` : sql`(t.converted AND t.is_pre_conversion)`;
+}
+/** Total converted (touch row t): first valid payment on/after a touch and not before the window start; purchased class: the class payment */
+export function convAfterCond(sql: Sql, f: Filters, winFrom: string): Frag {
+  const bb = boughtBases(f);
+  if (bb) return classPaid(sql, sql`t.lead_id`, bb, sql`cp.payment_date >= t.touch_date AND cp.payment_date >= ${winFrom} ${payWin(sql, f)}`);
+  return sql`(${convFirstCond(sql, f)} AND t.converted_at >= ${winFrom})`;
+}
+/** Converted before the window (touch row t): first valid payment before the window start; purchased class: a class payment before it */
+export function convBeforeCond(sql: Sql, f: Filters, winFrom: string): Frag {
+  const bb = boughtBases(f);
+  if (bb) return classPaid(sql, sql`t.lead_id`, bb, sql`cp.payment_date < ${winFrom}`);
+  return sql`(t.converted AND t.converted_at < ${winFrom})`;
 }
 
 /** main window: basis=created -> leads created in the range (all their touches); otherwise touches dated in the range */
@@ -83,6 +103,8 @@ export function flatWhere(sql: Sql, f: Filters, p: Period | null, skip?: string)
       continue;
     }
     if (!col) continue;
+    const bb = k === 'class_group' ? boughtBases(f) : null;   // purchased class: the lead paid for that class (filters.ts)
+    if (bb) { c.push(classPopulation(sql, sql`t.lead_id`, f, bb)); continue; }
     const hasNull = vals.includes('(null)'); const real = vals.filter((v) => v !== '(null)');
     const ref = sql`t.${sql(col)}`;
     if (hasNull && real.length) c.push(sql`(${ref} IN ${sql(real)} OR ${ref} IS NULL)`);
@@ -174,10 +196,12 @@ overview.get('/overview', (c) =>
     const conv = convCond(sql, f);
     // Total converted: first valid payment on/after a touch of the selection AND not before the window start, so a lead created in the
     // window that had already paid months earlier (an app touch backfilled onto the payment day) is not "converted after a touch" here
-    const convFirst = sql`(${convFirstCond(sql, f)} AND t.converted_at >= ${winFrom})`;
+    // (purchased class: both test the date of the payment for the picked class, see convAfterCond / convBeforeCond)
+    const convFirst = convAfterCond(sql, f, winFrom);
     // "Converted before the window": leads of the selection whose FIRST valid payment is dated before the window start (already customers);
-    // the two KPIs never overlap (converted_at >= winFrom vs < winFrom)
-    const convBefore = sql`(t.converted AND t.converted_at < ${winFrom})`;
+    // the two KPIs never overlap (converted_at >= winFrom vs < winFrom). Purchased class: a payment for the class before the window start
+    // (a lead can then be in both: Class 10 bought last year and again this month).
+    const convBefore = convBeforeCond(sql, f, winFrom);
     // Leads of the selection with NO touch at all (on both bases: created in the window, never touched) are part of Total leads, so they are
     // part of the two conversion KPIs too (user rule, 2026-11-04). "After a touch" cannot apply to them: a never-touched lead is converted when
     // its FIRST valid payment (dashboard rule, phone or alternative number) is on/after the day it was created and not before the window start,
@@ -191,8 +215,13 @@ overview.get('/overview', (c) =>
     const untouched = sql`SELECT l.lead_id, l.created_date, (SELECT min(vp.payment_date) FROM analytics.v_valid_payment_x vp WHERE vp.phone_key = l.phone_key) AS first_pay
                           FROM analytics.mv_lead_lite l WHERE ${newLeadWhere(sql, f, periods.current)} AND l.phone_valid
                             AND NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id)`;
-    const uAfter = pp ? sql`(u.first_pay >= u.created_date AND u.first_pay BETWEEN ${pp.from} AND ${pp.to})` : sql`(u.first_pay >= u.created_date AND u.first_pay >= ${winFrom})`;
-    const uBefore = sql`(u.first_pay < ${winFrom})`;
+    // never-touched conversions (alias u: lead_id, created_date, first_pay); purchased class: the class payment's date instead of first_pay
+    const bb = boughtBases(f);
+    const ppWin = pp ? sql`AND cp.payment_date BETWEEN ${pp.from} AND ${pp.to}` : sql``;
+    const uAfter = bb ? classPaid(sql, sql`u.lead_id`, bb, sql`cp.payment_date >= u.created_date AND cp.payment_date >= ${winFrom} ${ppWin}`)
+      : pp ? sql`(u.first_pay >= u.created_date AND u.first_pay BETWEEN ${pp.from} AND ${pp.to})` : sql`(u.first_pay >= u.created_date AND u.first_pay >= ${winFrom})`;
+    const uBefore = bb ? classPaid(sql, sql`u.lead_id`, bb, sql`cp.payment_date < ${winFrom}`) : sql`(u.first_pay < ${winFrom})`;
+    const uConvAny = bb ? classPaid(sql, sql`u.lead_id`, bb, sql`cp.payment_date >= u.created_date`) : sql`(u.first_pay >= u.created_date)`;
     // The lead-level cards (LM stage, IC status, class, LM reason, last call reason, interested course) and the two stage tiles count the
     // never-touched leads of the selection as well, so they add up to Total leads (user rule 2026-11-04). One statement over that lead set
     // answers every card; a card whose own dim is filtered gets its own statement without that filter (like the touch cards). The touch-level
@@ -205,7 +234,7 @@ overview.get('/overview', (c) =>
                CASE WHEN l.phone_valid THEN (SELECT min(vp.payment_date) FROM analytics.v_valid_payment_x vp WHERE vp.phone_key = l.phone_key) END AS first_pay
         FROM analytics.mv_lead_lite l WHERE ${newLeadWhere(sql, f, periods.current, { skip })}
           AND ${noTouch}),
-      c AS (SELECT u.*, (u.first_pay >= u.created_date) AS conv, ${uAfter} AS conv_first FROM u)
+      c AS (SELECT u.*, ${uConvAny} AS conv, ${uAfter} AS conv_first FROM u)
       SELECT d.dim, COALESCE(d.key, '(null)') AS key, count(DISTINCT c.lead_id)::int AS leads,
              count(DISTINCT c.lead_id) FILTER (WHERE c.conv)::int AS converted, count(DISTINCT c.lead_id) FILTER (WHERE c.conv_first)::int AS converted_first, 0::int AS ics
       FROM c CROSS JOIN LATERAL (VALUES ('lead_stage', c.lead_stage), ('class_raw', c.class_raw), ('lm_reason', c.lm_reason)) AS d(dim, key)
@@ -478,8 +507,11 @@ overview.get('/overview', (c) =>
         // Touch-date basis: leads with a touch dated in the window. leads_touched = leads of the selection that have a touch (base of the rates).
         leads: leadsAll, leads_touched: k.leads,
         // the two conversion KPIs cover the whole Total leads population: touched leads (payment on/after a touch) + never-touched leads
-        converted_first: k.converted_first + (convU?.after ?? 0), converted_before: k.converted_before + (convU?.before ?? 0),
+        converted_first: k.converted_first + (convU?.after ?? 0),
+        converted_before: k.converted_before + (convU?.before ?? 0),
         converted_untouched: convU?.after ?? 0, converted_before_untouched: convU?.before ?? 0,
+        // the filter-bar class switch as applied: 'bought' only when it is on AND a Class is picked
+        class_on: bb ? 'bought' : 'lead',
         stage_conv_total: k.stage_conv_total + uStage('total'), stage_conv_unpaid: k.stage_conv_unpaid + uStage('unpaid'), paid_other_stage: k.paid_other_stage + uStage('paid_other'),
         stage_react: reactRows.reduce((a, r) => a + r.reactivated, 0),
         stage_react_total: reactRows.reduce((a, r) => a + r.total, 0),
@@ -533,6 +565,7 @@ overview.get('/overview', (c) =>
         stage_conv_unpaid: 'Leads whose Salesforce Lead Stage is "Converted" but with NO valid payment on their phone (any date): marked converted without a purchase.',
         paid_other_stage: 'Leads counted in Total converted (valid payment on/after a touch, inside the payment window when it is on) whose Lead Stage is NOT "Converted": paid, but the stage was never updated.',
         converted_before: 'Leads of the selection (created or touched in the range, per the basis) that were ALREADY customers when the window started: their first valid payment (app or Ujra, matched by phone or alternative number) is dated before the window start (the payment window start when the Payment date filter is on). They are not in Total converted. Never-touched leads of the selection whose first valid payment is before the window start count too ("no touch" split).',
+        class_on: 'Class filter = Purchased class: a picked Class means the lead\x27s number paid for a course of that class (Class 10 Board and a Class 10 batch match), on any date or inside the payment window when it is on. Total converted = that class payment is on/after a touch and not before the window start; Converted before the window = a payment for that class before the window start, so one lead can be in both. Ujra bookings carry no class and are left out.',
         conv_ay: 'Academic-year split: the academic year of the course (the Academic Year field of the course in the app, as in Metabase) of the lead\x27s LATEST valid payment that has one. Ujra bookings and old payments without a batch carry no academic year and are skipped; "(no academic year)" = none of the lead\x27s payments has one, folded into "other". The year written in a batch title is not used.',
         avg_touches_alltime: 'Average number of touches a paying lead received, no date filter. The headline is weighted by touch rows (a lead with 6 touches counts 6 times), the caption shows the plain per-lead average.',
         avg_touches_window: 'Same as the all-time average, restricted to touches dated inside the window.',

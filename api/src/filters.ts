@@ -111,6 +111,7 @@ export const FilterSchema = z.object({
   paid: z.enum(['paid', 'organic']).optional(),
   paid_touch: z.enum(['paid', 'organic']).optional(),
   hot: flag, supreme_hot: flag, relogged: flag, repeat: flag, pre_existing: flag,
+  class_on: z.enum(['lead', 'bought']).optional(),   // what a picked Class means: the Salesforce lead class (default) or a class paid for
   ...listShape,
 }).passthrough();
 
@@ -185,6 +186,43 @@ export function andAll(sql: Sql, conds: Frag[]): Frag {
   return conds.reduce((acc, c) => sql`${acc} AND ${c}`, sql`true`);
 }
 
+// ---------------------------------------------------------------- purchased class (filter-bar switch class_on=bought, 2026-11-23)
+/**
+ * With the switch on "Purchased class", a picked Class means "the lead's number PAID for a course of that class" instead of "the Class on
+ * the Salesforce lead". Both are compared on the base class ("Class 10 Board" -> "Class 10"). The payments are analytics.mv_lead_class_pay
+ * (sql/051: valid app payments, payment_method 0, lead matched on the account's phone or alternative number; Ujra bookings carry no batch).
+ * The date that matters is the date of THAT class payment: the lead population = such a payment on any date (inside the payment-date
+ * window when it is on); the conversion tiles test the same payment's date against the touch and the window start.
+ */
+export const classBase = (v: string) => /^Class \d+/.exec(v)?.[0] ?? v;
+/**
+ * A picked (lead-style) Class -> the purchased classes it matches. Purchased classes carry the same names (analytics.purchase_class, sql/052),
+ * so most picks match one name exactly ("Class 10 CBSE" = CBSE courses only). Lead-only names widen: "Class 11 (no stream)" = any Class 11
+ * course of the state board, "Class 11 CBSE" = the CBSE Class 11 courses; "Plus Two Completed", "NMMS", "Other", "Unknown" match no course.
+ */
+export function purchasedMatches(v: string): string[] {
+  const ns = /^Class (1[12]) \(no stream\)$/.exec(v);
+  if (ns) return ['Science', 'Commerce', 'Humanities', '(no stream)'].map((s) => `Class ${ns[1]} ${s}`);
+  const cb = /^Class (1[12]) CBSE$/.exec(v);
+  if (cb) return [`Class ${cb[1]} Science CBSE`, `Class ${cb[1]} Commerce CBSE`, `Class ${cb[1]} Humanities CBSE`];
+  return [v];
+}
+/** the purchased classes to match when the switch is on Purchased class and a Class is picked; null = the normal lead-class filter */
+export function boughtBases(f: Filters): string[] | null {
+  if (f.class_on !== 'bought') return null;
+  const vals = (f.class_group ?? []).filter((v) => v !== '(null)');
+  return vals.length ? [...new Set(vals.flatMap(purchasedMatches))] : null;
+}
+/** the lead `leadRef` paid for a course of one of `classes`, with an optional extra condition on that payment (alias cp, cp.payment_date) */
+export function classPaid(sql: Sql, leadRef: Frag, classes: string[], extra?: Frag): Frag {
+  return sql`EXISTS (SELECT 1 FROM analytics.mv_lead_class_pay cp WHERE cp.lead_id = ${leadRef} AND cp.purchased_class IN ${sql(classes)} ${extra ? sql`AND ${extra}` : sql``})`;
+}
+/** the class filter as a lead-population condition (purchased-class mode): such a payment on any date, or inside the payment window when it is on */
+export function classPopulation(sql: Sql, leadRef: Frag, f: Filters, bases: string[]): Frag {
+  const pp = paymentPeriod(f);
+  return classPaid(sql, leadRef, bases, pp ? sql`cp.payment_date BETWEEN ${pp.from} AND ${pp.to}` : undefined);
+}
+
 export interface BuildOpts {
   /** ignore the date window (Lead explorer lists every lead) */
   noPeriod?: boolean; skip?: string; }
@@ -212,6 +250,8 @@ export function leadWhere(sql: Sql, f: Filters, p: Period, opts: BuildOpts = {})
     if (k === opts.skip) continue;
     const vals = f[k];
     if (!vals?.length) continue;
+    const bb = k === 'class_group' ? boughtBases(f) : null;
+    if (bb) { c.push(classPopulation(sql, sql`l.lead_id`, f, bb)); continue; }
     if (isLeadDim(k)) c.push(inList(sql, 'l', LEAD_DIMS[k].col, vals));
     else touchConds.push(inList(sql, 't', TOUCH_DIMS[k as TouchDim].col, vals));
   }

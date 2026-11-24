@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Sql } from 'postgres';
 import type { AppEnv, Role } from '../env';
 import { handle, intParam, maskEmail, maskName, maskPhone, pct, csvStream, timedAll } from '../http';
-import { LIST_KEYS, parseFilters, resolvePeriods, type Filters, type Frag, type Period } from '../filters';
+import { LIST_KEYS, parseFilters, resolvePeriods, boughtBases, type Filters, type Frag, type Period } from '../filters';
 import { shapeTat, tatBucket, type TatRow } from './overview';
 
 /**
@@ -74,6 +74,25 @@ function payRestrict(sql: Sql, q: Record<string, string>, skip?: string): Frag {
   return c.reduce((a, x) => sql`${a} AND ${x}`, sql`true`);
 }
 
+/**
+ * Lead class vs purchased class (2026-11-23). Both sides are reduced to the base class ("Class 10", "Class 12", "Repeater" ...) so a
+ * Salesforce "Class 10 Board" and a batch graded "Class 10" compare equal; Ujra bookings are "Integrated" (residential Plus One / Plus Two).
+ * LEAD side = mv_payer.class_group (the Salesforce Class of the user's lead); BOUGHT side = the grade of the batch on the payment's enrollment.
+ */
+// Full names (heatmap, Purchased class filter, 2026-11-23): the lead's Class Group, and the purchased course named the same way from its
+// grade + course title (analytics.purchase_class, sql/052: "Class 10 CBSE", "Class 12 Science" ...). The mismatch tile stays on the base class.
+const LEAD_CLASS = (sql: Sql) => sql`(CASE WHEN m.no_lead THEN 'No Salesforce Lead' ELSE COALESCE(m.class_group, 'Unknown') END)`;
+const BOUGHT_CLASS = (sql: Sql) => sql`(CASE WHEN hp.source = 'ujra' THEN 'Integrated' ELSE analytics.purchase_class(b.grade_title, b.course_title) END)`;
+const LEAD_BASE = (sql: Sql) => sql`COALESCE(substring(${LEAD_CLASS(sql)} from '^Class [0-9]+'), ${LEAD_CLASS(sql)})`;
+const BOUGHT_BASE = (sql: Sql) => sql`COALESCE(substring(${BOUGHT_CLASS(sql)} from '^Class [0-9]+'), ${BOUGHT_CLASS(sql)})`;
+/** a user bought a class other than the lead's (users whose lead has no class, and Integrated bookings, are not counted as mismatches;
+ *  a crash course is the Class 12 / Plus Two Completed / Repeater track, so it matches those leads) */
+const MISMATCH = (sql: Sql) => sql`${LEAD_BASE(sql)} NOT IN ('Unknown', 'No Salesforce Lead') AND ${BOUGHT_BASE(sql)} NOT IN (${LEAD_BASE(sql)}, 'Integrated')
+  AND NOT (${BOUGHT_BASE(sql)} IN ('KEAM/JEE Crash', 'NEET Crash', 'Repeater', 'Plus Two Completed') AND ${LEAD_BASE(sql)} IN ('Class 12', 'Plus Two Completed', 'Repeater', 'KEAM/JEE Crash', 'NEET Crash'))`;
+/** payments of the user inside the window (payment method switch applied), with the batch for the grade: the base of the class-mix checks */
+const userPayments = (sql: Sql, p: Period, pm: PayMethod) => sql`analytics.v_payment_all hp LEFT JOIN app.core_batch b ON b.id = COALESCE(hp.enrollment_batch_id, hp.batch_id)
+  WHERE hp.user_id = m.user_id AND ${VALID(sql, pm)} AND hp.payment_date BETWEEN ${p.from} AND ${p.to}`;
+
 function payerWhere(sql: Sql, f: Filters, p: Period, q: Record<string, string>, skip?: string): Frag {
   const grades = skip === 'grade' ? [] : (q.grade ?? '').split('|').map((s) => s.trim()).filter(Boolean);
   const courses = skip === 'course' ? [] : (q.course ?? '').split('|').map((s) => s.trim()).filter(Boolean);
@@ -83,6 +102,12 @@ function payerWhere(sql: Sql, f: Filters, p: Period, q: Record<string, string>, 
   for (const k of LIST_KEYS) {
     const col = PAYER_COLS[k]; const vals = f[k];
     if (!col || !vals?.length || k === skip) continue;
+    // Class filter on the PURCHASED class (filter-bar switch class_on=bought): a payment in the window for a course of that class (full name)
+    const bought = k === 'class_group' ? boughtBases(f) : null;
+    if (bought) {
+      c.push(sql`EXISTS (SELECT 1 FROM ${userPayments(sql, p, pm)} AND ${BOUGHT_CLASS(sql)} IN ${sql(bought)})`);
+      continue;
+    }
     const hasNull = vals.includes('(null)'); const real = vals.filter((v) => v !== '(null)');
     const ref = sql`m.${sql(col)}`;
     if (hasNull && real.length) c.push(sql`(${ref} IN ${sql(real)} OR ${ref} IS NULL)`);
@@ -95,6 +120,12 @@ function payerWhere(sql: Sql, f: Filters, p: Period, q: Record<string, string>, 
     else if (q.dim === 'course') c.push(payWindow(sql, p, [], [q.value], pm));
     // App Installed as the last touch, split by the source of the touch before it (the "what came before the install" card)
     else if (q.dim === 'app_prev_source') c.push(sql`m.last_touch_source = 'App Installed' AND ${PREV_SOURCE(sql)} = ${q.value}`);
+    // class-mix matrix cell ("lead class||bought class") and the mismatch tile
+    else if (q.dim === 'class_mix') {
+      const [lead, bought] = q.value.split('||');
+      c.push(sql`${LEAD_CLASS(sql)} = ${lead ?? ''} AND EXISTS (SELECT 1 FROM ${userPayments(sql, p, pm)} AND ${BOUGHT_CLASS(sql)} = ${bought ?? ''})`);
+    }
+    else if (q.dim === 'class_mismatch') c.push(sql`EXISTS (SELECT 1 FROM ${userPayments(sql, p, pm)} AND ${MISMATCH(sql)})`);
     else if (q.dim === 'new_customer') c.push(sql`${pm === 'm0' ? sql`m.first_payment_date_m0` : sql`m.first_payment_date`} BETWEEN ${p.from} AND ${p.to}`);
     else if ((FIRST_DIMS as readonly string[]).includes(q.dim)) {
       c.push(q.value === 'No Touch Before Payment'
@@ -144,15 +175,20 @@ converted.get('/converted', (c) =>
       FROM analytics.mv_payer m LEFT JOIN analytics.mv_payer_first_touch ft ON ft.user_id = m.user_id
       WHERE ${wx('source')} AND m.last_touch_source = 'App Installed'
       GROUP BY 1 ORDER BY users DESC LIMIT 2000`;
-    const [[k], [pk], byStage, byPoint, bySource, byMedium, byCampaign, byStaff, byCourse, byGrade, daily, grades, tatRows, firstRows, appPrevRows] = await timedAll(
-      ['kpis', 'payments', 'stage', 'touch_point', 'source', 'medium', 'campaign', 'staff', 'course', 'grade', 'daily', 'grades', 'tat', 'first_touch', 'app_prev'], [
+    // lead class vs purchased class: one row per (user, lead base class, bought base class) for the payments inside the window
+    const mixRows = sql`
+      SELECT DISTINCT m.user_id, ${LEAD_CLASS(sql)} AS lead_class, ${BOUGHT_CLASS(sql)} AS bought_class, (${MISMATCH(sql)}) AS mismatch
+      FROM analytics.mv_payer m JOIN analytics.v_payment_all hp ON hp.user_id = m.user_id LEFT JOIN app.core_batch b ON b.id = COALESCE(hp.enrollment_batch_id, hp.batch_id)
+      WHERE ${w} AND ${V} AND ${R} AND hp.payment_date BETWEEN ${p.from} AND ${p.to}`;
+    const [[k], [pk], byStage, byPoint, bySource, byMedium, byCampaign, byStaff, byCourse, byGrade, daily, grades, tatRows, firstRows, appPrevRows, classMix, [classKpi]] = await timedAll(
+      ['kpis', 'payments', 'stage', 'touch_point', 'source', 'medium', 'campaign', 'staff', 'course', 'grade', 'daily', 'grades', 'tat', 'first_touch', 'app_prev', 'class_mix', 'class_kpi'], [
       sql<{ users: number; new_users: number; no_touch: number; no_lead: number; revenue: number; touches: number }[]>`
         SELECT count(*)::int AS users, count(*) FILTER (WHERE ${pm === 'm0' ? sql`m.first_payment_date_m0` : sql`m.first_payment_date`} BETWEEN ${p.from} AND ${p.to})::int AS new_users,
                count(*) FILTER (WHERE m.last_touch_id IS NULL)::int AS no_touch, count(*) FILTER (WHERE m.no_lead)::int AS no_lead,
                COALESCE(sum(m.revenue), 0)::float8 AS revenue, COALESCE(sum(m.touches_before_payment), 0)::int AS touches
         FROM analytics.mv_payer m WHERE ${w}`,
       // sales = courses paid for: one per enrollment (app) / booking (Ujra, enrollment_id = -booking_id) with a payment in the window; a payment
-      // without an enrollment counts as its own sale. With "Method 0" this is the Metabase "Total Sales - 1st payment" unit (first payments only).
+      // without an enrollment counts as its own sale. With "First payment" this is the Metabase "Total Sales - 1st payment" unit (first payments only).
       sql<{ payments_all: number; revenue_all: number; sales: number; sales_app: number; sales_ujra: number }[]>`
         SELECT count(*)::int AS payments_all, COALESCE(sum(hp.amount), 0)::float8 AS revenue_all,
                count(DISTINCT COALESCE(hp.enrollment_id::text, 'p' || hp.id::text))::int AS sales,
@@ -193,6 +229,14 @@ converted.get('/converted', (c) =>
         UNION ALL
         SELECT kind, '_all', count(*)::int, avg(days)::float8, percentile_cont(0.5) WITHIN GROUP (ORDER BY days)::float8 FROM d GROUP BY 1`,
       firstP, appPrevP,
+      sql<{ lead_class: string; bought_class: string; users: number }[]>`
+        WITH x AS (${mixRows}) SELECT lead_class, bought_class, count(DISTINCT user_id)::int AS users FROM x GROUP BY 1, 2`,
+      sql<{ mismatch_users: number; with_class_users: number; no_class_users: number }[]>`
+        WITH x AS (${mixRows})
+        SELECT count(DISTINCT user_id) FILTER (WHERE mismatch)::int AS mismatch_users,
+               count(DISTINCT user_id) FILTER (WHERE lead_class NOT IN ('Unknown', 'No Salesforce Lead'))::int AS with_class_users,
+               count(DISTINCT user_id) FILTER (WHERE lead_class = 'Unknown')::int AS no_class_users
+        FROM x`,
     ]);
     const appPrevTot = appPrevRows.reduce((s, r) => s + r.users, 0);
     const byAppPrev: PayerDim[] = appPrevRows.map((r) => ({ ...r, share_pct: pct(r.users, appPrevTot) }));
@@ -209,18 +253,19 @@ converted.get('/converted', (c) =>
       by_first_campaign: byFirst('first_touch_campaign'), by_first_staff: byFirst('first_touch_staff'),
       by_app_prev_source: byAppPrev,
       by_course: byCourse, by_grade: byGrade, daily, grades: grades.map((g) => g.key),
+      class_mix: classMix, class_kpi: { ...classKpi, mismatch_pct: pct(classKpi.mismatch_users, classKpi.with_class_users) }, class_on: q.class_on === 'bought' ? 'bought' : 'lead',
       tat: { created: shapeTat(tatRows, 'created'), touch: shapeTat(tatRows, 'touch') },
       definitions: {
         users: pm === 'm0'
           ? 'Distinct paying app users with a valid payment (payment_method 0, not deleted, is_success, payment_success) whose payment date is in the window. This counts paying app accounts, including people with no Salesforce lead.'
           : pm === 'm1'
             ? 'Paying users with a valid payment of payment_method 1 (gateway EMI instalments; every such row carries an emi_id) dated in the window.'
-            : 'Distinct paying app users with ANY valid payment (any payment_method; not deleted, is_success, payment_success) dated in the window. Switch to "Method 0" to count payment_method 0 only, as the Overview does.',
+            : 'Distinct paying app users with ANY valid payment (any payment_method; not deleted, is_success, payment_success) dated in the window. Switch to "First payment" to count payment_method 0 only, as the Overview does.',
         sales: pm === 'm0'
-          ? 'Courses sold: one per enrollment (app) or booking (Ujra) with a Method 0 payment - the first payment of that course - dated in the window, made by a user of the selection. The same unit as Metabase "Total Sales - 1st payment" (which additionally requires a sales person). A user buying two courses counts twice; an instalment on an older course does not count.'
+          ? 'Courses sold: one per enrollment (app) or booking (Ujra) with a first payment (payment_method 0) - the first payment of that course - dated in the window, made by a user of the selection. The same unit as Metabase "Total Sales - 1st payment" (which additionally requires a sales person). A user buying two courses counts twice; an instalment on an older course does not count.'
           : pm === 'm1'
-            ? 'Courses with a Method 1 payment (an instalment) dated in the window, one per enrollment or booking.'
-            : 'Courses with any valid payment dated in the window, one per enrollment (app) or booking (Ujra): new sales and courses receiving an instalment alike. Switch to "Method 0" for sales only.',
+            ? 'Courses with a follow-up payment (payment_method 1) (an instalment) dated in the window, one per enrollment or booking.'
+            : 'Courses with any valid payment dated in the window, one per enrollment (app) or booking (Ujra): new sales and courses receiving an instalment alike. Switch to "First payment" for sales only.',
         new_users: 'Paying users whose FIRST ever valid payment is inside the window (new customers).',
         tat: 'Turnaround time of the paying users in the selection, in calendar days, measured to the user\'s FIRST valid payment day (first method-0 payment in M0 mode). "Lead created → paid": from the creation day of the user\'s Salesforce lead (the most recent lead on the phone) to that payment day; users with no lead are left out; "before lead created" = the lead was created after the first payment. "Last touch → paid": from the latest lead touch on or before that payment day to the payment day; "no prior touch" = no touch before the first payment. Median = half the users were faster.',
         no_touch: 'Users with no lead touch on/before their payment: no Salesforce lead on that phone, or all touches came after the payment. Shown as "No Touch Before Payment" in the tables.',
@@ -231,18 +276,21 @@ converted.get('/converted', (c) =>
         first_credit: 'First-touch view: every user is credited to its EARLIEST touch dated on/before its last valid payment day, across all Salesforce leads on the account\'s phone or alternative number - the touch that brought the lead in. "No Touch Before Payment" = no lead on the phone, or every touch came after the payment. The last-touch cards credit the latest such touch instead; the same users appear in both, under possibly different values. Rows open the list of those users.',
         course: 'Users by the course they bought; a user buying two courses appears under both. The course is the one of the batch on the payment\x27s ENROLLMENT (where the student is enrolled now), with " - Fastrack" / " - Booster" added from the batch name; the batch written on the payment is used only when the enrollment has none.',
         grade: 'Grade of the course that was bought (batch of the payment\x27s enrollment), not the class recorded on the lead.',
+        class_mix: 'Paying users by the Class on their Salesforce lead (rows) and the class of the course they bought in the window (columns), both with the same names: the course class comes from its grade and course title (SSLC English Medium = Class 10 Board, Class 10 CBSE Tuition = Class 10 CBSE, Plus One Science (CBSE) = Class 11 Science CBSE, Foundation courses = CBSE, CUET crash = Class 12 + stream). Ujra bookings are Integrated. The diagonal is the same class; a user who bought two classes appears in both columns. Lead-only names (Class 11 (no stream), Plus Two Completed) have no matching column.',
+        class_mismatch: 'Users with a class on their lead who bought a course of a DIFFERENT base class in the window (for example a Class 12 lead buying a Class 7 batch). Leads with no class and Ujra (Integrated) bookings are not counted. % = of the users whose lead has a class.',
+        class_on: 'Class filter (filter-bar switch): "Lead class" = the Class on the Salesforce lead; "Purchased class" = on this page, the class of a course bought in the window.',
         stage: 'Lead stage of the user\'s most recently created Salesforce lead (one lead per user).',
         revenue: 'Sum of payment amounts of the users in the row (all their valid payments, any method, any date).',
-        pm: 'Payment method: "All" counts every successful payment; "Method 0" counts payment_method 0 only (the first payment of a course; for Ujra the booking payment), the rule the Overview uses; "Method 1" is the rest (gateway EMI instalments). In the user list, course / grade / payments / revenue cover the payments inside the selected dates; the all-time columns cover every payment of the user.',
+        pm: 'Payment method: "All" counts every successful payment; "First payment" counts payment_method 0 only (the first payment of a course; for Ujra the booking payment), the rule the Overview uses; "Follow-up" is the rest (gateway EMI instalments). In the user list, course / grade / payments / revenue cover the payments inside the selected dates; the all-time columns cover every payment of the user.',
       },
     };
   }),
 );
 
 // ---------------------------------------------------------------- payer list (drill-down + CSV)
-const SORTABLE: Record<string, string> = { last_payment_date: 'last_payment_date', first_payment_date: 'first_payment_date', revenue: 'revenue', payments: 'payments', touches_before_payment: 'touches_before_payment', last_touch_at: 'last_touch_at', lead_name: 'lead_name', lead_stage: 'lead_stage', class_raw: 'class_raw' };
+const SORTABLE: Record<string, string> = { last_payment_date: 'last_payment_date', first_payment_date: 'first_payment_date', revenue: 'revenue', payments: 'payments', touches_before_payment: 'touches_before_payment', last_touch_at: 'last_touch_at', last_call_at: 'last_call_at', lead_name: 'lead_name', lead_stage: 'lead_stage', class_raw: 'class_raw' };
 const COLS = ['user_id', 'lead_name', 'first_name', 'last_name', 'mobile', 'email', 'lead_stage', 'class_raw', 'lead_source', 'owner_name', 'courses', 'grades', 'payments', 'first_payment_date', 'last_payment_date', 'revenue', 'payments_all_time', 'revenue_all_time', 'first_payment_ever',
-  'last_touch_point', 'last_touch_source', 'last_touch_medium', 'last_touch_campaign', 'last_touch_staff', 'last_touch_at', 'first_touch_point', 'first_touch_source', 'first_touch_at', 'prev_touch_point', 'prev_touch_source', 'prev_touch_at', 'touches_before_payment', 'no_lead', 'lead_id'];
+  'last_touch_point', 'last_touch_source', 'last_touch_medium', 'last_touch_campaign', 'last_touch_staff', 'last_touch_at', 'first_touch_point', 'first_touch_source', 'first_touch_at', 'prev_touch_point', 'prev_touch_source', 'prev_touch_at', 'touches_before_payment', 'last_call_at', 'last_call_reason', 'calls', 'no_lead', 'lead_id'];
 
 function maskRow(r: Rec, role: Role): Rec {
   return { ...r, mobile: maskPhone(r.mobile as string | null, role), phone_key: maskPhone(r.phone_key as string | null, role), email: maskEmail(r.email as string | null, role), first_name: maskName(r.first_name as string | null, role), last_name: maskName(r.last_name as string | null, role) };
@@ -268,7 +316,7 @@ function listQuery(sql: Sql, f: Filters, p: Period, q: Record<string, string>, p
            x.last_touch_point, x.last_touch_source, x.last_touch_medium, x.last_touch_campaign, x.last_touch_staff, x.last_touch_at::text AS last_touch_at,
            COALESCE(x.first_touch_point, 'No Touch Before Payment') AS first_touch_point, COALESCE(x.first_touch_source, 'No Touch Before Payment') AS first_touch_source, x.first_touch_at::text AS first_touch_at,
            COALESCE(x.prev_touch_point, 'No Earlier Touch') AS prev_touch_point, COALESCE(x.prev_touch_source, 'No Earlier Touch') AS prev_touch_source, x.prev_touch_at::text AS prev_touch_at,
-           x.touches_before_payment, x.no_lead, x.lead_id, count(*) OVER ()::int AS total_rows
+           x.touches_before_payment, x.last_call_at::text AS last_call_at, x.last_call_reason, x.calls, x.no_lead, x.lead_id, count(*) OVER ()::int AS total_rows
     FROM (
       SELECT m.user_id, m.lead_name, l.first_name__c AS first_name, l.last_name__c AS last_name, u.phone AS mobile, l.email__c AS email,
              m.lead_stage, m.class_raw, m.lead_source, m.owner_name,
@@ -276,8 +324,10 @@ function listQuery(sql: Sql, f: Filters, p: Period, q: Record<string, string>, p
              m.payments AS payments_all_time, m.revenue::float8 AS revenue_all_time, m.first_payment_date AS first_payment_ever,
              m.last_touch_point, m.last_touch_source, m.last_touch_medium, m.last_touch_campaign, m.last_touch_staff, m.last_touch_at,
              ft.first_touch_point, ft.first_touch_source, ft.first_touch_at, ft.prev_touch_point, ft.prev_touch_source, ft.prev_touch_at,
-             m.touches_before_payment, m.no_lead, m.lead_id
+             m.touches_before_payment, m.no_lead, m.lead_id,
+             lc.last_call_at, lc.last_reason AS last_call_reason, COALESCE(lc.calls, 0) AS calls   -- the lead's last call (salesforce.lead_calls), 2026-11-24
       FROM analytics.mv_payer m
+      LEFT JOIN salesforce.lead_calls lc ON lc.lead_id = m.lead_id
       LEFT JOIN analytics.mv_payer_first_touch ft ON ft.user_id = m.user_id
       LEFT JOIN salesforce.lead_master__c l ON l.id = m.lead_id
       LEFT JOIN app.home_customuser u ON u.id = m.user_id

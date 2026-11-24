@@ -88,7 +88,7 @@ export function AppShell() {
             </Popover>
           </div>
           <div className="flex items-center gap-2">
-            <SyncButton />
+            {user?.role === 'admin' && <SyncButton />}
             <button className="btn !px-2" onClick={toggle} title="Toggle theme">{dark ? <Icon.Sun /> : <Icon.Moon />}</button>
             <UserMenu />
           </div>

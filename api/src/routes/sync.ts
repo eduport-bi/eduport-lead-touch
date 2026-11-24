@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
 import type { AppEnv, Env } from '../env';
 
 /**
@@ -8,6 +8,15 @@ import type { AppEnv, Env } from '../env';
  * and the var GITHUB_REPO ("owner/repo").
  */
 export const syncRoute = new Hono<AppEnv>();
+
+// Admins only (2026-11-12): a sync slows every page for its 5-13 minutes, and the button used to be shown to every signed-in user,
+// BDEs included. The daily 06:00 IST run (dailySync, Worker cron) is not affected.
+const adminOnly: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (c.get('user')?.role !== 'admin') return c.json({ error: { code: 'forbidden', message: 'Sync now is for admins only' } }, 403);
+  await next();
+};
+syncRoute.use('/sync', adminOnly);
+syncRoute.use('/sync/*', adminOnly);
 
 const COOLDOWN_MIN = 10;
 
