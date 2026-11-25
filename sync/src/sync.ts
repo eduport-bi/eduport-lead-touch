@@ -552,6 +552,31 @@ async function syncFrom(urlEnv: string, tables: AppTableSpec[], label: string): 
   }
 }
 
+// ---------------------------------------------------------------- late leads (2026-11-25)
+/**
+ * An old lead (created before LEAD_SINCE) is held once it has a touch, but the lead increment reads only leads CHANGED since its watermark:
+ * when a touch is added to (or moved onto, by a merge) an old lead without the lead itself changing, the touch arrives and its lead
+ * never does. Fetch every lead a held touch points to that is missing, by Id, so the lead and (now kept) its courses, calls and stage
+ * history show up together. Normally a handful per day.
+ */
+async function syncMissingLeads(s: SfSession): Promise<void> {
+  const spec = OBJECTS.find((o) => o.object === 'Lead_Master__c' && !o.key)!;
+  const missing = (await sql<{ id: string }[]>`
+    SELECT DISTINCT t.lead_master__c AS id FROM salesforce.lead_touch__c t
+    WHERE NOT t.isdeleted AND t.lead_master__c IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM salesforce.lead_master__c l WHERE l.id = t.lead_master__c)`).map((r) => r.id);
+  if (!missing.length) { console.log('[late leads] none missing'); return; }
+  let n = 0;
+  for (let i = 0; i < missing.length; i += 200) {
+    const ids = missing.slice(i, i + 200).map((x) => `'${x.replace(/'/g, '')}'`).join(',');
+    for await (const page of soql(s, `SELECT ${spec.fields.join(', ')} FROM Lead_Master__c WHERE Id IN (${ids})`, true)) {
+      const rows = page.map((rec) => toRow(spec, rec));
+      if (rows.length) { await upsert(`salesforce.${spec.table}`, rows); n += rows.length; }
+    }
+  }
+  console.log(`[late leads] ${missing.length} leads referenced by touches were missing; fetched ${n}`);
+}
+
 // ---------------------------------------------------------------- keep the replica minimal
 // queryAll delivers deleted rows (isdeleted = true) so watermarks stay correct; we then purge them,
 // together with anything outside the lead window, so storage stays small (Supabase free tier).
@@ -562,15 +587,15 @@ async function cleanup(): Promise<void> {
   const r1 = await sql`DELETE FROM salesforce.lead_master__c l WHERE l.isdeleted OR l.is_deleted__c
     OR (l.createddate < ${leadSince}::date AND COALESCE(l.is_converted__c, false) = false AND COALESCE(l.lead_stage__c, '') <> 'Converted'
         AND NOT EXISTS (SELECT 1 FROM salesforce.lead_touch__c t WHERE t.lead_master__c = l.id AND NOT t.isdeleted))`;
-  const r2 = await sql`DELETE FROM salesforce.interested_course__c ic WHERE ic.isdeleted OR NOT EXISTS (SELECT 1 FROM salesforce.lead_master__c l WHERE l.id = ic.lead_master__c)`;
+  // Interested Courses, stage rows and call summaries are KEPT when their lead is not held (yet) (2026-11-25). Until then they were deleted
+  // as orphans, and because every increment reads only records changed since its watermark, they never came back when the lead entered
+  // the dashboard later (an old lead's first touch, a merge moving touches onto it): 3,666 courses of 3,650 held leads were missing
+  // on 25 Nov 2026, and late leads showed "(no call)" / no stage history. Only records deleted in Salesforce are purged now. The extra rows
+  // (courses, calls and stage of leads outside the lead window) are small; every dashboard view joins them to a held lead anyway.
+  const r2 = await sql`DELETE FROM salesforce.interested_course__c ic WHERE ic.isdeleted`;
   const r3 = await sql`DELETE FROM salesforce.lead_touch__c WHERE isdeleted`;
   const r4 = await sql`DELETE FROM salesforce.task WHERE isdeleted`;
-  // stage rows and call summaries are kept for EVERY lead the dashboard holds (until 2026-10-23 they were pruned to leads with touches,
-  // which silently dropped the calls and stage history of untouched 2025 leads: a lead touched for the first time later showed "(no call)"
-  // although Salesforce had calls, because the increment never re-fetches old tasks). Only rows of leads no longer held are removed.
-  const r5 = await sql`DELETE FROM salesforce.lead_stage s WHERE NOT EXISTS (SELECT 1 FROM salesforce.lead_master__c l WHERE l.id = s.lead_id)`;
-  const r6 = await sql`DELETE FROM salesforce.lead_calls c WHERE NOT EXISTS (SELECT 1 FROM salesforce.lead_master__c l WHERE l.id = c.lead_id)`;
-  console.log(`[cleanup] removed leads=${r1.count} ics=${r2.count} touches=${r3.count} tasks=${r4.count} stage_rows=${r5.count} call_rows=${r6.count} (window >= ${leadSince}, deleted rows purged)`);
+  console.log(`[cleanup] removed leads=${r1.count} ics=${r2.count} touches=${r3.count} tasks=${r4.count} (window >= ${leadSince}, deleted rows purged; courses / calls / stage of leads not held are kept)`);
   });
 }
 
@@ -630,6 +655,7 @@ async function main(): Promise<void> {
     if (specs.length) {
       const s = await login();
       for (const spec of specs) await syncSalesforceObject(s, spec);
+      if (specs.some((o) => o.table === 'lead_touch__c' || o.table === 'lead_master__c')) await syncMissingLeads(s);
     }
     if (wanted(STAGE_HISTORY_KEY)) {
       const s = await login();

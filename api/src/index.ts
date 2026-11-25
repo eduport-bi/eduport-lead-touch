@@ -140,7 +140,8 @@ export async function warmCache(env: Env, ctx: FetchCtx): Promise<{ url: string;
   for (const { url, role } of await warmTargets(env, ctx)) {
     const t0 = Date.now();
     try {
-      const res = await app.fetch(new Request(`https://warm.internal${url}`, { headers: { [INTERNAL_HEADER]: INTERNAL_TOKEN(), [INTERNAL_ROLE_HEADER]: role, accept: 'application/json' } }), env, ctx);
+      // revalidate=1: compute when the stored answer is from an older data version (a plain request would just get that stale answer)
+      const res = await app.fetch(new Request(`https://warm.internal${url}${url.includes('?') ? '&' : '?'}revalidate=1`, { headers: { [INTERNAL_HEADER]: INTERNAL_TOKEN(), [INTERNAL_ROLE_HEADER]: role, accept: 'application/json' } }), env, ctx);
       await res.arrayBuffer();   // drain so the body is not kept open
       out.push({ url, status: res.status, cache: res.headers.get('X-LT-Cache') ?? '-', ms: Date.now() - t0 });
     } catch (e) {

@@ -1,5 +1,5 @@
 // Response shapes of the Worker API (kept in sync with api/src/routes/*)
-export interface Envelope<T> { data: T; meta: { period: Period; previous: Period | null; basis: string; tookMs: number } }
+export interface Envelope<T> { data: T; meta: { period: Period; previous: Period | null; basis: string; tookMs: number }; /** set by apiFetch: the server sent the last answer of an older data version (a refresh follows) */ stale?: boolean }
 export interface Period { from: string; to: string }
 
 export interface Definition { key: string; title: string; plain: string; sql: string; deviation?: string }

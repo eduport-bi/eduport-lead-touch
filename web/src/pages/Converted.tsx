@@ -161,7 +161,7 @@ export default function Converted() {
         {card('Touch point analysis (last touch)', d?.by_last_touch_point, 'last_touch_point', 'tone-teal', { filterDim: 'touch_point', height: 260 })}
         {card('Touch point analysis (first touch)', d?.by_first_touch_point, 'first_touch_point', 'tone-teal', { height: 260, help: def.first_credit })}
         {card('Class wise conversion (purchased course)', d?.by_course, 'course', 'tone-violet', { asTable: true, cols: payCols, help: def.course, pick: { selected: courses, toggle: toggleIn(courses, setCourses), set: setCourses } })}
-        {card('Purchased grade', d?.by_grade, 'grade', 'tone-amber', { cols: payCols, help: def.grade, height: 280 })}
+        {card('Purchased grade', d?.by_grade, 'grade', 'tone-amber', { cols: payCols, help: def.grade, height: 280, filterDim: 'purchased_grade' })}
         {card('Lead source distribution (last touch)', d?.by_last_source, 'last_touch_source', 'tone-orange', { filterDim: 'source', asTable: true,
           help: `Lead source distribution (last touch). ${def.credit ?? ''} The "+" on the App Installed row splits those users by the source of the touch BEFORE the install. ${def.app_prev ?? ''}`,
           expand: { key: 'App Installed', rows: d?.by_app_prev_source ?? [], onPick: (key) => open(`App Installed (last touch) · touch before it: ${key}`, 'app_prev_source', key, 'paying users credited to an App Installed last touch whose touch before the install has this source · click a row for the lead record') } })}
@@ -186,7 +186,7 @@ export default function Converted() {
       </div>
 
       {drill && <DrillDrawer drill={drill} onClose={() => setDrill(null)} />}
-      <Note>This page counts <b>paying app users</b>, not Salesforce leads, and its date range is the <b>payment date</b>, whatever the basis switch says. Each user is credited to one touch: the latest touch dated on or before the last payment day, across every lead sharing the phone (an Eduport App touch less than 2 hours before the payment passes the credit to the touch before it, unless it is the only touch); users without such a touch are grouped as "No Touch Before Payment", and users whose phone matches no lead as "No Salesforce lead". Purchased grade and course come from the batch that was bought, so they can differ from the lead's class. The Class Group chip in the filter bar applies to the lead's class; switch it to Purchased class to filter by the class that was bought.</Note>
+      <Note>This page counts <b>paying app users</b>, not Salesforce leads, and its date range is the <b>payment date</b>, whatever the basis switch says. Each user is credited to one touch: the latest touch dated on or before the last payment day, across every lead sharing the phone (an Eduport App touch less than 2 hours before the payment passes the credit to the touch before it, unless it is the only touch); users without such a touch are grouped as "No Touch Before Payment", and users whose phone matches no lead as "No Salesforce lead". Purchased grade and course come from the batch that was bought, so they can differ from the lead's class. On this page the Class filter is the grade of the batch that was bought (the core grade titles, as in Metabase); the class on the Salesforce lead does not filter it.</Note>
     </div>
   );
 }

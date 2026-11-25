@@ -7,6 +7,7 @@ import { ErrorBoundary, Icon, Popover } from './ui';
 import { useAuth, ROLE_LABEL, canExplore } from '../lib/auth';
 import { UserMenu } from './UserMenu';
 import { SyncButton } from './SyncButton';
+import { useUpdating } from '../lib/api';
 
 export const NAV = [
   { to: '/', label: 'Overview', icon: <Icon.Home /> },
@@ -24,7 +25,9 @@ export function AppShell() {
   const base = canExplore(user?.role) ? NAV : NAV.filter((n) => n.to !== '/leads');
   const nav = user?.role === 'admin' ? [...base, { to: '/access', label: 'Access', icon: <Icon.Users /> }] : base;
   const asOf = meta?.dataAsOf;
-  const stale = asOf?.refreshed_at ? Date.now() - new Date(asOf.refreshed_at).getTime() > 6 * 3600e3 : false;
+  // one sync a day (06:00 IST, 2026-11-25): data up to a day old is normal; amber only when the daily refresh was missed
+  const stale = asOf?.refreshed_at ? Date.now() - new Date(asOf.refreshed_at).getTime() > 26 * 3600e3 : false;
+  const updating = useUpdating();
   const syncErr = meta?.syncState.some((s) => s.last_error);
   const path = useLocation().pathname;
   const noFilters = path.startsWith('/analysis') || path.startsWith('/access');   // Analysis works from the uploaded file, Access is not data
@@ -86,6 +89,7 @@ export function AppShell() {
                 </tbody></table>
               </div>
             </Popover>
+            {updating && <span className="chip animate-pulse border-accent/40 text-accent" title="Showing the numbers from before the last data refresh; the new numbers replace them in a moment">Updating…</span>}
           </div>
           <div className="flex items-center gap-2">
             {user?.role === 'admin' && <SyncButton />}

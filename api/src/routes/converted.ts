@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Sql } from 'postgres';
 import type { AppEnv, Role } from '../env';
 import { handle, intParam, maskEmail, maskName, maskPhone, pct, csvStream, timedAll } from '../http';
-import { LIST_KEYS, parseFilters, resolvePeriods, boughtBases, type Filters, type Frag, type Period } from '../filters';
+import { LIST_KEYS, parseFilters, resolvePeriods, type Filters, type Frag, type Period } from '../filters';
 import { shapeTat, tatBucket, type TatRow } from './overview';
 
 /**
@@ -93,6 +93,16 @@ const MISMATCH = (sql: Sql) => sql`${LEAD_BASE(sql)} NOT IN ('Unknown', 'No Sale
 const userPayments = (sql: Sql, p: Period, pm: PayMethod) => sql`analytics.v_payment_all hp LEFT JOIN app.core_batch b ON b.id = COALESCE(hp.enrollment_batch_id, hp.batch_id)
   WHERE hp.user_id = m.user_id AND ${VALID(sql, pm)} AND hp.payment_date BETWEEN ${p.from} AND ${p.to}`;
 
+/** The Class filter of this page = core grade titles of the batch bought (filter-bar list purchased_grade, 2026-11-25): merged into the
+ *  page's grade selection (q.grade, pipe-separated), which keeps the users who paid for one of those grades in the window AND counts only
+ *  those payments (revenue, courses, grade table, daily), like the former in-page Purchased grade picker. */
+function withGrade(f: Filters, q: Record<string, string>): Record<string, string> {
+  const picked = (f.purchased_grade ?? []).filter((v) => v !== '(null)');
+  if (!picked.length) return q;
+  const own = (q.grade ?? '').split('|').map((x) => x.trim()).filter(Boolean);
+  return { ...q, grade: [...new Set([...own, ...picked])].join('|') };
+}
+
 function payerWhere(sql: Sql, f: Filters, p: Period, q: Record<string, string>, skip?: string): Frag {
   const grades = skip === 'grade' ? [] : (q.grade ?? '').split('|').map((s) => s.trim()).filter(Boolean);
   const courses = skip === 'course' ? [] : (q.course ?? '').split('|').map((s) => s.trim()).filter(Boolean);
@@ -102,12 +112,9 @@ function payerWhere(sql: Sql, f: Filters, p: Period, q: Record<string, string>, 
   for (const k of LIST_KEYS) {
     const col = PAYER_COLS[k]; const vals = f[k];
     if (!col || !vals?.length || k === skip) continue;
-    // Class filter on the PURCHASED class (filter-bar switch class_on=bought): a payment in the window for a course of that class (full name)
-    const bought = k === 'class_group' ? boughtBases(f) : null;
-    if (bought) {
-      c.push(sql`EXISTS (SELECT 1 FROM ${userPayments(sql, p, pm)} AND ${BOUGHT_CLASS(sql)} IN ${sql(bought)})`);
-      continue;
-    }
+    // the lead Class does not filter this page (2026-11-25): its Class filter is the purchased grade (filter purchased_grade, merged into
+    // q.grade by withGrade), whatever the Lead class / Purchased class switch says on the other pages
+    if (k === 'class_group') continue;
     const hasNull = vals.includes('(null)'); const real = vals.filter((v) => v !== '(null)');
     const ref = sql`m.${sql(col)}`;
     if (hasNull && real.length) c.push(sql`(${ref} IN ${sql(real)} OR ${ref} IS NULL)`);
@@ -152,7 +159,8 @@ async function byDim(sql: Sql, w: Frag, col: string, p: Period, limit = 2000): P
 }
 
 converted.get('/converted', (c) =>
-  handle(c, async ({ sql, f, periods, q }) => {
+  handle(c, async ({ sql, f, periods, q: q0 }) => {
+    const q = withGrade(f, q0);
     const p = periods.current;
     const w = payerWhere(sql, f, p, q);
     const wx = (skip: string) => payerWhere(sql, f, p, q, skip);   // a card never filters itself
@@ -344,7 +352,8 @@ function listQuery(sql: Sql, f: Filters, p: Period, q: Record<string, string>, p
 }
 
 converted.get('/converted/users', (c) =>
-  handle(c, async ({ sql, f, periods, q, role }) => {
+  handle(c, async ({ sql, f, periods, q: q0, role }) => {
+    const q = withGrade(f, q0);
     const limit = intParam(q, 'limit', 50, 1, 200);
     const page = intParam(q, 'page', 1, 1, 100000);
     const rows = await listQuery(sql, f, periods.current, q, { limit, offset: (page - 1) * limit });
@@ -354,7 +363,7 @@ converted.get('/converted/users', (c) =>
 );
 
 converted.get('/converted/users.csv', async (c) => {
-  const q = c.req.query(); const f = parseFilters(q); const periods = resolvePeriods(f); const role = c.get('user').role;
+  const q0 = c.req.query(); const f = parseFilters(q0); const q = withGrade(f, q0); const periods = resolvePeriods(f); const role = c.get('user').role;
   const cap = Number.parseInt(c.env.EXPORT_ROW_CAP ?? '50000', 10) || 50000;
   return csvStream(c, { cols: COLS, cap, filename: `converted_users_${periods.current.from}_${periods.current.to}.csv`, mask: (r) => maskRow(r, role),
     fetchPage: (sql, limit, offset) => listQuery(sql, f, periods.current, q, { limit, offset }) });

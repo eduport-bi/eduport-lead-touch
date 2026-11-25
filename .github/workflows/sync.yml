@@ -1,16 +1,12 @@
-# Salesforce + production DB -> Supabase, every 4 hours, then refresh the MVs.
+# Salesforce + production DB -> Supabase, once a day (06:00 IST, started by the Worker cron), then refresh the MVs.
 # Secrets (repo Settings -> Secrets and variables -> Actions):
 #   SF_CLIENT_ID, SF_CLIENT_SECRET, SF_LOGIN_URL, DATABASE_URL, SOURCE_DATABASE_URL
 # Manual runs: Actions -> "sync" -> Run workflow (tick "full" for a full reload).
 name: sync
 on:
-  schedule:
-    # The daily sync is wanted at 06:00 IST. GitHub starts this schedule 6 to 8.5 hours late on this repo (a 10:00 IST schedule ran between
-    # 16:00 and 18:40 IST every day), so the punctual trigger is the Worker's cron (api/src/routes/sync.ts dailySync: dispatches this workflow
-    # at 06:00 IST, needs the Worker secret GITHUB_TOKEN). This schedule is the fallback: 21:30 IST (16:00 UTC), which with the usual delay
-    # lands between 03:30 and 06:10 IST, and at worst (no delay) leaves the dashboard on the previous evening's data.
-    # The free GitHub Actions minutes ran low with six runs a day (2026-10-17); use "Sync now" for an intraday refresh.
-    - cron: '0 16 * * *'
+  # ONE sync a day (user rule 2026-11-25): the Worker's cron dispatches this workflow at 06:00 IST (api/src/routes/sync.ts dailySync,
+  # retried at 06:10 / 06:20 when the dispatch fails; needs the Worker secret GITHUB_TOKEN). The 21:30 IST fallback schedule was removed:
+  # every extra run emptied the dashboard's cache and slowed it for the 5-minute refresh. "Sync now" (admins) for an intraday refresh.
   workflow_dispatch:
     inputs:
       full:

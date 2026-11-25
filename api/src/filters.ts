@@ -112,6 +112,8 @@ export const FilterSchema = z.object({
   paid_touch: z.enum(['paid', 'organic']).optional(),
   hot: flag, supreme_hot: flag, relogged: flag, repeat: flag, pre_existing: flag,
   class_on: z.enum(['lead', 'bought']).optional(),   // what a picked Class means: the Salesforce lead class (default) or a class paid for
+  class_match: flag,                  // 1 = drop buyers whose purchased class differs from their lead class (classMatch below), 2026-11-25
+  purchased_grade: list,              // Converted page only: its Class filter = core grade titles of the batch bought (routes/converted.ts withGrade)
   ...listShape,
 }).passthrough();
 
@@ -223,6 +225,23 @@ export function classPopulation(sql: Sql, leadRef: Frag, f: Filters, bases: stri
   return classPaid(sql, leadRef, bases, pp ? sql`cp.payment_date BETWEEN ${pp.from} AND ${pp.to}` : undefined);
 }
 
+/**
+ * Tick box "Lead class = purchased class" (filter class_match=1, 2026-11-25): leave out MISMATCHED BUYERS - leads with a known class
+ * that paid for courses, none of them of the lead's class. Leads that did not buy stay (so conversion rates keep their base). Same match
+ * as the Converted page's "Bought a different class" tile: base class ("Class 10 Board" = a Class 10 batch); a crash / repeater course
+ * matches Class 12, Plus Two Completed, Repeater and crash leads; Ujra bookings are not in mv_lead_class_pay, so they never mismatch.
+ */
+export function classMatchKeep(sql: Sql, leadRef: Frag, leadClass: Frag): Frag {
+  const base = sql`COALESCE(substring(${leadClass} from '^Class [0-9]+'), ${leadClass})`;
+  return sql`NOT (
+    ${leadClass} IS NOT NULL AND ${base} NOT IN ('Unknown', 'Other')
+    AND EXISTS (SELECT 1 FROM analytics.mv_lead_class_pay cp WHERE cp.lead_id = ${leadRef})
+    AND NOT EXISTS (SELECT 1 FROM analytics.mv_lead_class_pay cp WHERE cp.lead_id = ${leadRef}
+                    AND (cp.base_class = ${base}
+                         OR (cp.base_class IN ('KEAM/JEE Crash', 'NEET Crash', 'Repeater', 'Plus Two Completed')
+                             AND ${base} IN ('Class 12', 'Plus Two Completed', 'Repeater', 'KEAM/JEE Crash', 'NEET Crash')))))`;
+}
+
 export interface BuildOpts {
   /** ignore the date window (Lead explorer lists every lead) */
   noPeriod?: boolean; skip?: string; }
@@ -238,6 +257,7 @@ export function leadWhere(sql: Sql, f: Filters, p: Period, opts: BuildOpts = {})
     case 'touch':   c.push(sql`EXISTS (SELECT 1 FROM analytics.v_touch_base tx WHERE tx.lead_id = l.lead_id AND tx.touch_date BETWEEN ${p.from} AND ${p.to})`); break;
   }
 
+  if (f.class_match === '1') c.push(classMatchKeep(sql, sql`l.lead_id`, sql`l.class_group`));
   if (f.converted === '1') c.push(sql`l.converted = true`);
   if (f.converted === '0') c.push(sql`l.converted = false`);
   if (f.paid && opts.skip !== 'paid') c.push(boolCond(sql, 'l', 'is_paid_lead', f.paid === 'paid'));

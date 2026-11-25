@@ -3,7 +3,7 @@ import type { Sql } from 'postgres';
 import type { AppEnv, Role } from './env';
 import { getSql, release, withSql } from './db';
 import { parseFilters, resolvePeriods, type Filters, type Periods } from './filters';
-import { cacheGet, cacheKey, cachePut, dataVersion, KV_TTL_VERSIONED, wantsFresh } from './cache';
+import { cacheGet, cacheKey, cachePut, dataVersion, KV_TTL_VERSIONED, packAnswer, unpackAnswer, wantsFresh } from './cache';
 
 export interface Ctx { sql: Sql; f: Filters; periods: Periods; q: Record<string, string>; role: Role; }
 
@@ -28,17 +28,38 @@ export async function handle<T>(c: Context<AppEnv>, fn: (x: Ctx) => Promise<T>, 
   const headers: Record<string, string> = { 'Cache-Control': `private, max-age=${cache}` };
 
   let key: string | null = null; let ttl = KV_TTL_VERSIONED;
+  // 'version' answers (2026-11-25): ONE entry per view, holding the last answer and the data version it was computed for. Same version =
+  // a hit. Older version (a sync ran since) = the old answer is returned at once as "stale" (X-LT-Cache: stale); the page shows it and asks
+  // again with revalidate=1, which computes the fresh answer (single flight). The cron warm-up asks with revalidate=1 too.
+  let version: string | null = null;
+  const revalidate = q.revalidate === '1';
   // `wrangler dev --remote` inherits the deployed Worker's BUILD_ID, so dev and production would share cache entries (dev would read
   // answers of the live code and write answers of unreleased code). The launch config passes --var CACHE_SCOPE:dev; localhost hosts count too.
   const isDev = c.env.CACHE_SCOPE === 'dev' || /^(localhost|127.0.0.1|[::1])$/.test(new URL(c.req.url).hostname);
   const build = isDev ? devBuildId() : (c.env.BUILD_ID ?? 'nobuild');
   if (edge && c.req.method === 'GET') {
     const mask = user.role === 'viewer' || user.role === 'bde' ? 'masked' : 'full';   // masked roles never read an answer computed for a full one (and vice versa)
-    if (edge === 'version') key = await cacheKey({ version: await dataVersion(c.env, c.executionCtx), build, mask, path: c.req.path, query: q });
+    if (edge === 'version') {
+      version = await dataVersion(c.env, c.executionCtx);
+      // local testing only: x-lt-test-version pretends a newer data version, to see the stale path without touching the live database
+      if (isDev && c.req.header('x-lt-test-version')) version = `${version}|${c.req.header('x-lt-test-version')}`;
+      key = await cacheKey({ version: 'latest', build, mask, path: c.req.path, query: q });
+    }
     else { ttl = edge.ttl; key = await cacheKey({ version: `ttl${edge.ttl}`, build, mask, path: c.req.path, query: q, user: edge.perUser ? String(user.id ?? user.email) : undefined }); }
   }
 
-  const json = (body: string, tag: string) => new Response(body, { status: 200, headers: { ...headers, 'Content-Type': 'application/json; charset=UTF-8', 'X-LT-Cache': tag } });
+  const json = (body: string, tag: string) => new Response(body, { status: 200, headers: { ...headers, 'Content-Type': 'application/json; charset=UTF-8', 'X-LT-Cache': tag, 'Access-Control-Expose-Headers': 'X-LT-Cache' } });
+  // what a stored value means for this request: a hit (same version, or a ttl entry), a stale answer, or nothing usable
+  const readStored = (raw: string): { body: string; fresh: boolean } => {
+    if (version === null) return { body: raw, fresh: true };
+    const u = unpackAnswer(raw);
+    return { body: u.body, fresh: u.version === version };
+  };
+  // the old answer first: no waiting behind the computation of the new one (unless this request is the one that asked for it)
+  if (key && version !== null && !revalidate && !wantsFresh(c.req.raw, q)) {
+    const hit = await cacheGet(c.env, key);
+    if (hit) { const s = readStored(hit.body); if (s.fresh) return json(s.body, `hit-${hit.layer}`); return json(s.body, 'stale'); }
+  }
   // single flight: a second identical request while the first is still computing (the warm-up and the first visitor, two users on the
   // same view) waits for that answer instead of running the same fan-out again on the two-core database. The entry is registered
   // synchronously as soon as the key is known - the cache lookup runs inside the shared work - because with the lookup before the
@@ -57,12 +78,12 @@ export async function handle<T>(c: Context<AppEnv>, fn: (x: Ctx) => Promise<T>, 
   const work = (async (): Promise<Answer> => {
     if (key && !wantsFresh(c.req.raw, q)) {
       const hit = await cacheGet(c.env, key);
-      if (hit) return { body: hit.body, tag: `hit-${hit.layer}` };
+      if (hit) { const s = readStored(hit.body); if (s.fresh) return { body: s.body, tag: `hit-${hit.layer}` }; }   // only a same-version answer ends a revalidation
     }
     const t0 = Date.now();
     const data = await withSql(c.env, c.executionCtx, (sql) => fn({ sql, f, periods, q, role: user.role }));
     const body = JSON.stringify({ data, meta: { period: periods.current, previous: periods.previous, basis: f.basis, tookMs: Date.now() - t0, cachedAt: key ? new Date().toISOString() : undefined, build: key ? build : undefined } });
-    if (key) cachePut(c.env, c.executionCtx, key, body, ttl);
+    if (key) cachePut(c.env, c.executionCtx, key, version !== null ? packAnswer(version, body) : body, ttl);
     return { body, tag: key ? 'miss' : 'bypass' };
   })();
   if (key) { inflight.set(key, work); const done = work.catch(() => undefined).finally(() => { if (inflight.get(key) === work) inflight.delete(key); }); c.executionCtx.waitUntil(done); }

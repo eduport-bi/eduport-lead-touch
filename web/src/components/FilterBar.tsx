@@ -8,7 +8,10 @@ import { MultiSelect } from './MultiSelect';
 const QUICK: { key: ListDim; label: string }[] = [
   { key: 'class_group', label: 'Class' }, { key: 'touch_point', label: 'Touch point' }, { key: 'source', label: 'Lead source' }, { key: 'campaign', label: 'Campaign' }, { key: 'medium', label: 'Medium' },
 ];
-const QUICK_KEYS = new Set<string>(QUICK.map((q) => q.key));
+// Converted page (mode payment, 2026-11-25): its Class picker lists the core grade titles of the batch bought (purchased_grade); the lead Class
+// does not filter that page, so the Lead class / Purchased class switch and the match tick box are not shown there
+const QUICK_PAYMENT: { key: ListDim; label: string }[] = [{ key: 'purchased_grade', label: 'Class' }, ...QUICK.slice(1)];
+const QUICK_KEYS = new Set<string>([...QUICK.map((q) => q.key), 'purchased_grade']);
 
 export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
   const { f, set, setList, clearAll, activeCount, saveFilter, forgetFilter, savedQuery, isSaved } = useFilters();
@@ -18,7 +21,7 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
   const onForget = async () => { setSaving('busy'); try { await forgetFilter(); setSaving('idle'); } catch { setSaving('error'); setTimeout(() => setSaving('idle'), 2500); } };
 
   const chips: { label: string; onRemove: () => void }[] = [];
-  for (const [k, vals] of Object.entries(f.lists)) if (vals?.length && !QUICK_KEYS.has(k)) chips.push({ label: `${DIM_LABEL[k] ?? k}: ${vals.length > 2 ? `${vals.slice(0, 2).join(', ')} +${vals.length - 2}` : vals.join(', ')}`, onRemove: () => setList(k as ListDim, []) });
+  for (const [k, vals] of Object.entries(f.lists)) if (vals?.length && !QUICK_KEYS.has(k) && !(k === 'class_group' && mode === 'payment')) chips.push({ label: `${DIM_LABEL[k] ?? k}: ${vals.length > 2 ? `${vals.slice(0, 2).join(', ')} +${vals.length - 2}` : vals.join(', ')}`, onRemove: () => setList(k as ListDim, []) });
   for (const [k, v] of Object.entries(f.flags)) if (v) chips.push({ label: `${DIM_LABEL[k] ?? k}: ${v === '1' ? 'yes' : 'no'}`, onRemove: () => set((p) => ({ ...p, flags: { ...p.flags, [k]: undefined } })) });
 
   return (
@@ -48,17 +51,22 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
 
 
         {/* quick pickers: Class (grouped, sql/050: Class 7 / 8 / 9 / 10 split CBSE vs Board (state syllabus, Malayalam + English medium), SSLC -> Class 10, Class 11 / 12 split by stream (Science / Commerce / Humanities / no stream) plus CBSE where recorded, CUET -> Class 12 (no stream), repeaters -> Repeater ...), Touch point, Lead source, Campaign */}
-        {QUICK.map((qk) => { const v = f.lists[qk.key] ?? []; return (
+        {(mode === 'payment' ? QUICK_PAYMENT : QUICK).map((qk) => { const v = f.lists[qk.key] ?? []; return (
           <span key={qk.key} className="contents">
           <button className={`btn max-w-[240px] ${v.length ? 'border-accent/40 text-accent' : ''}`} title={`Filter by ${qk.label.toLowerCase()} (multi-select)`} onClick={() => setOpenDim(qk.key)}>
             <span className="text-ink-3">{qk.label}</span> <span className="truncate">{v.length === 0 ? 'All' : v.length <= 2 ? v.join(', ') : `${v.length} selected`}</span> <Icon.Chevron open />
           </button>
           {/* what a picked Class means, on every page (2026-11-23) */}
-          {qk.key === 'class_group' && (
+          {qk.key === 'class_group' && (<>
             <Segmented<'lead' | 'bought'> value={f.classOn} onChange={(classOn) => set({ classOn })} size="xs"
               options={[{ value: 'lead', label: 'Lead class', title: 'Class = the Class on the Salesforce lead' },
                         { value: 'bought', label: 'Purchased class', title: 'Class = a class the lead paid for (Class 10 Board matches a Class 10 batch). Conversions use the date of that class payment.' }]} />
-          )}
+            {/* drop buyers whose purchased class differs from their lead class (2026-11-25) */}
+            <label className={`btn cursor-pointer gap-1.5 ${f.classMatch ? 'border-accent/40 text-accent' : ''}`} title="Leave out buyers who bought a class other than the Class on their lead (Class 10 lead buying Class 12). Leads that did not buy stay.">
+              <input type="checkbox" className="accent-[var(--accent)]" checked={f.classMatch} onChange={(e) => set({ classMatch: e.target.checked })} />
+              Lead class = purchased class
+            </label>
+          </>)}
           </span>
         ); })}
 

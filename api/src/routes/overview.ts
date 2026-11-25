@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Sql } from 'postgres';
 import type { AppEnv } from '../env';
 import { handle, pct, timedAll } from '../http';
-import { LIST_KEYS, paymentPeriod, icCourseExpr, icCourseIn, boughtBases, classPaid, classPopulation, type Filters, type Frag, type Period } from '../filters';
+import { LIST_KEYS, paymentPeriod, icCourseExpr, icCourseIn, boughtBases, classPaid, classPopulation, classMatchKeep, type Filters, type Frag, type Period } from '../filters';
 import { newLeadWhere } from './new_leads';
 
 /**
@@ -74,6 +74,7 @@ export function flatWhere(sql: Sql, f: Filters, p: Period | null, skip?: string)
   if (f.converted === '0') c.push(sql`NOT ${convCond(sql, f)}`);
   if (f.paid) c.push(f.paid === 'paid' ? sql`t.is_paid_lead = true` : sql`t.is_paid_lead IS NOT TRUE`);
   if (f.paid_touch) c.push(f.paid_touch === 'paid' ? sql`t.is_paid_touch = true` : sql`t.is_paid_touch IS NOT TRUE`);
+  if (f.class_match === '1') c.push(classMatchKeep(sql, sql`t.lead_id`, sql`t.class_group`));
   for (const k of LIST_KEYS) {
     const col = FLAT_COLS[k]; const vals = f[k];
     if (!vals?.length || k === skip) continue;

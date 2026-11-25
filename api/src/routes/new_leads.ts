@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Sql } from 'postgres';
 import type { AppEnv, Role } from '../env';
 import { handle, intParam, maskEmail, maskName, maskPhone, csvStream } from '../http';
-import { parseFilters, resolvePeriods, paymentPeriod, inList, andAll, isLeadDim, LEAD_DIMS, LIST_KEYS, icCourseIn, boughtBases, classPaid, classPopulation, type Filters, type Frag, type Period } from '../filters';
+import { parseFilters, resolvePeriods, paymentPeriod, inList, andAll, isLeadDim, LEAD_DIMS, LIST_KEYS, icCourseIn, boughtBases, classPaid, classPopulation, classMatchKeep, type Filters, type Frag, type Period } from '../filters';
 import { FLAT_COLS } from './overview';
 
 /**
@@ -43,6 +43,7 @@ export function newLeadWhere(sql: Sql, f: Filters, p: Period | null, opts: { val
   if (f.dups !== '1') c.push(sql`l.is_duplicate = false`);
   if (f.paid) c.push(f.paid === 'paid' ? sql`l.is_paid_lead = true` : sql`l.is_paid_lead IS NOT TRUE`);
   if (f.repeat) c.push(f.repeat === '1' ? sql`l.is_repeat = true` : sql`l.is_repeat IS NOT TRUE`);
+  if (f.class_match === '1') c.push(classMatchKeep(sql, sql`l.lead_id`, sql`l.class_group`));
   // validPay: the dashboard's conversion rule (valid payment, payment_method 0); otherwise any successful payment (payer table)
   const paid = opts.validPay
     ? sql`EXISTS (SELECT 1 FROM analytics.v_valid_payment_x vp WHERE vp.phone_key = l.phone_key)`

@@ -14,6 +14,24 @@ export const filters = new Hono<AppEnv>();
 filters.get('/filters', (c) =>
   handle(c, async ({ sql, f, periods, q }) => {
     const dim = q.dim;
+    // Converted page's Class picker (2026-11-25): the core grade titles of the batches bought (app.core_batch.grade_title = production's
+    // core_grade.title; Ujra bookings are "Integrated"), with the paying users of the date range (the page's range is the payment date).
+    // Every grade on a batch is listed, also those with no payment in the range, so a selection never disappears from the list.
+    if (dim === 'purchased_grade') {
+      const p = periods.current;
+      const rows = await sql<{ value: string; leads: number; converted: number }[]>`
+        WITH paid AS (
+          SELECT COALESCE(hp.grade_label, b.grade_title, 'No Grade On Batch') AS value, count(DISTINCT hp.user_id)::int AS users
+          FROM analytics.v_payment_all hp LEFT JOIN app.core_batch b ON b.id = COALESCE(hp.enrollment_batch_id, hp.batch_id)
+          WHERE hp.deleted = false AND hp.is_success = true AND hp.payment_success = true AND hp.payment_date BETWEEN ${p.from} AND ${p.to}
+          GROUP BY 1),
+        all_grades AS (SELECT DISTINCT grade_title AS value FROM app.core_batch WHERE grade_title IS NOT NULL UNION SELECT value FROM paid)
+        SELECT a.value, COALESCE(paid.users, 0) AS leads, COALESCE(paid.users, 0) AS converted
+        FROM all_grades a LEFT JOIN paid ON paid.value = a.value
+        ${q.q?.trim() ? sql`WHERE lower(a.value) LIKE ${'%' + q.q.trim().toLowerCase() + '%'}` : sql``}
+        ORDER BY 2 DESC, 1`;
+      return { dim, options: rows };
+    }
     if (!dim || !(isLeadDim(dim) || isTouchDim(dim))) {
       throw Object.assign(new Error(`unknown dim "${dim ?? ''}"`), { status: 400 });
     }

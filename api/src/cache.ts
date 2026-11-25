@@ -21,7 +21,10 @@ export const VERSION_FRESH_MS = 60_000;          // trust the in-memory version 
 const VERSION_STALE_MAX_MS = 15 * 60_000;        // serve a stale version (while refreshing) at most this long
 const MEM_MAX_ENTRIES = 150;
 const MEM_MAX_BYTES = 24 * 1024 * 1024;          // the isolate has 128 MB in total
-export const KV_TTL_VERSIONED = 6 * 3600;        // versioned entries: the version changes long before this
+// versioned answers are kept across data versions (2026-11-25): one entry per view holds the LAST answer and the version it was computed for,
+// so after a sync a request gets that answer at once (marked stale) while the page asks for the fresh one in the background (http.ts).
+// Kept 3 days so the overnight sync never meets an empty entry.
+export const KV_TTL_VERSIONED = 3 * 86400;
 const KV_VERSION_TTL = 120;
 
 // ---------------------------------------------------------------- data version
@@ -65,7 +68,7 @@ export function forgetVersion(): void { versionMem = null; }
 
 // ---------------------------------------------------------------- key
 export async function cacheKey(parts: { version: string; build: string; mask: string; path: string; query: Record<string, string>; user?: string }): Promise<string> {
-  const q = Object.keys(parts.query).filter((k) => k !== 'fresh').sort().map((k) => `${k}=${parts.query[k]}`).join('&');
+  const q = Object.keys(parts.query).filter((k) => k !== 'fresh' && k !== 'revalidate').sort().map((k) => `${k}=${parts.query[k]}`).join('&');
   const raw = `${parts.build}|${parts.version}|${parts.mask}|${parts.user ?? ''}|${parts.path}?${q}`;
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -116,6 +119,13 @@ export function cachePut(env: Env, ctx: Ctx, key: string, body: string, ttlSec: 
   memSet(key, body, ttlSec);
   if (!env.CACHE || body.length > 20 * 1024 * 1024) return;
   ctx.waitUntil(env.CACHE.put(key, body, { expirationTtl: Math.max(60, ttlSec) }).catch(() => undefined));
+}
+
+/** A versioned cache value = the data version it was computed for + newline + the JSON body. */
+export const packAnswer = (version: string, body: string) => `${version}\n${body}`;
+export function unpackAnswer(raw: string): { version: string | null; body: string } {
+  const i = raw.indexOf('\n');
+  return raw.startsWith('{') || i < 0 ? { version: null, body: raw } : { version: raw.slice(0, i), body: raw.slice(i + 1) };
 }
 
 /** True when the browser asked for a fresh copy (hard reload) or the URL carries fresh=1. */

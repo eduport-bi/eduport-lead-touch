@@ -1,4 +1,5 @@
-import { useQuery, type UseQueryOptions } from '@tanstack/react-query';
+import { useEffect, useSyncExternalStore } from 'react';
+import { useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
 import type { Envelope } from './types';
 
 export class ApiError extends Error {
@@ -32,15 +33,40 @@ export async function apiFetch<T>(path: string, params: Params = {}): Promise<En
   const body = (await res.json().catch(() => ({}))) as Envelope<T> & { error?: { message: string; issues?: unknown } };
   if (res.status === 401 || res.status === 403) authListeners.forEach((l) => l(res.status as 401 | 403, body.error?.message ?? res.statusText));
   if (!res.ok) throw new ApiError(res.status, body.error?.message ?? res.statusText, body.error?.issues);
+  if (res.headers.get('X-LT-Cache') === 'stale') body.stale = true;
   return body;
 }
 
+// ---------------------------------------------------------------- stale answers (2026-11-25)
+// After a sync the server answers at once with the last answer of the older data version (stale). The page shows it, asks again with
+// revalidate=1 in the background and swaps the fresh answer in. The header shows "Updating…" while any such refresh runs.
+let updating = 0; const updatingListeners = new Set<() => void>();
+const setUpdating = (d: number) => { updating = Math.max(0, updating + d); updatingListeners.forEach((l) => l()); };
+export function useUpdating(): boolean {
+  return useSyncExternalStore((cb) => { updatingListeners.add(cb); return () => { updatingListeners.delete(cb); }; }, () => updating > 0);
+}
+const revalidating = new Set<string>();
+
 export function useApi<T>(path: string, params: Params = {}, opts: Partial<UseQueryOptions<Envelope<T>, ApiError>> = {}) {
-  return useQuery<Envelope<T>, ApiError>({
-    queryKey: [path, params],
+  const qc = useQueryClient();
+  const queryKey = [path, params];
+  const q = useQuery<Envelope<T>, ApiError>({
+    queryKey,
     queryFn: () => apiFetch<T>(path, params),
     ...opts,
   });
+  const stale = q.data?.stale === true;
+  const id = JSON.stringify(queryKey);
+  useEffect(() => {
+    if (!stale || revalidating.has(id)) return;
+    revalidating.add(id); setUpdating(1);
+    apiFetch<T>(path, { ...params, revalidate: 1 })
+      .then((fresh) => qc.setQueryData(queryKey, fresh))
+      .catch(() => undefined)   // keep showing the old answer; the next visit tries again
+      .finally(() => { revalidating.delete(id); setUpdating(-1); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stale, id]);
+  return q;
 }
 
 export function downloadUrl(path: string, params: Params): string {
