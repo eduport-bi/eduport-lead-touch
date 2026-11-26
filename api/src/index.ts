@@ -100,11 +100,12 @@ export function warmUrls(): string[] {
   const to = ymd(nowIst); const from = ymd(new Date(nowIst.getTime() - 29 * 86400 * 1000));
   const base = (basis: 'created' | 'touch') => `from=${from}&to=${to}&basis=${basis}&compare=none`;
   const urls = [
-    `/api/overview?${base('created')}&stale_days=5`,
+    // Overview is asked for in two halves (part=top / part=rest, 2026-11-26); the top half does not take stale_days
+    `/api/overview?${base('created')}&part=top`, `/api/overview?${base('created')}&part=rest&stale_days=5`,
     `/api/converted?${base('created')}&pm=all`,
     `/api/touch-attribution?${base('created')}`,
     ...['class_group', 'touch_point', 'source', 'campaign', 'medium'].map((dim) => `/api/filters?${base('created')}&dim=${dim}&limit=5000`),
-    `/api/overview?${base('touch')}&stale_days=5`,
+    `/api/overview?${base('touch')}&part=top`, `/api/overview?${base('touch')}&part=rest&stale_days=5`,
     `/api/converted?${base('touch')}&pm=all`,
   ];
   return urls;
@@ -131,7 +132,7 @@ export async function warmTargets(env: Env, ctx: FetchCtx): Promise<{ url: strin
       if (!p) continue;
       const role: WarmRole = r.role === 'bde' ? 'bde' : 'analyst';
       const q = (extra: Record<string, string>) => new URLSearchParams({ ...p, ...extra }).toString();
-      out.push({ url: `/api/overview?${q({ stale_days: '5' })}`, role }, { url: `/api/converted?${q({ pm: 'all' })}`, role });
+      out.push({ url: `/api/overview?${q({ part: 'top' })}`, role }, { url: `/api/overview?${q({ part: 'rest', stale_days: '5' })}`, role }, { url: `/api/converted?${q({ pm: 'all' })}`, role });
     }
   } catch (e) {
     console.error('warm: saved filter sets not read', e instanceof Error ? e.message : e);

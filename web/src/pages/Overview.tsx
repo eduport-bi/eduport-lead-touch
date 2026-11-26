@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useApi } from '../lib/api';
 import { useFilters, type ListDim } from '../lib/filters';
 import { fmt1, fmt2, fmtInt, fmtINR, fmtPct } from '../lib/format';
@@ -82,17 +82,33 @@ export default function Overview() {
   const [staleDays, setStaleDays] = useState<number>(() => { try { const v = Number.parseInt(localStorage.getItem('lt-stale-days') ?? '', 10); return v >= 1 && v <= 365 ? v : 5; } catch { return 5; } });
   const changeStale = (v: number) => { const n = Math.max(1, Math.min(365, Math.round(v) || 1)); setStaleDays(n); try { localStorage.setItem('lt-stale-days', String(n)); } catch { /* ignore */ } };
   const staleQ = useDebounce(staleDays, 500);
-  const q = useApi<OverviewResponse>('/overview', { ...params, stale_days: staleQ });
+  // Two halves (2026-11-26): the first screen (tiles, Yet to connect, the funnels) loads at once; the cards further down load when the
+  // page is scrolled near them (400 px ahead), so the first screen does not wait behind statements nobody is looking at yet.
+  const q = useApi<OverviewResponse>('/overview', { ...params, part: 'top' });
+  const restRef = useRef<HTMLDivElement>(null);
+  const [restNear, setRestNear] = useState(false);
+  useEffect(() => {
+    const el = restRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') { setRestNear(true); return; }
+    const io = new IntersectionObserver(([e]) => setRestNear(!!e?.isIntersecting), { rootMargin: '400px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  const r = useApi<OverviewResponse>('/overview', { ...params, part: 'rest', stale_days: staleQ }, { enabled: restNear });
   const d = q.data?.data;
+  const rd = r.data?.data;
   const k = d?.kpis;
-  const def = d?.definitions ?? {};
+  const rk = rd?.kpis;
+  const def = { ...(rd?.definitions ?? {}), ...(d?.definitions ?? {}) };
+  // lower-half cards: a placeholder until their half has an answer (also while it waits to be scrolled to)
+  const restLoading = r.isPending;
   const [drill, setDrill] = useState<Drill | null>(null);
   const [tat, setTat] = useState<'created' | 'touch' | 'activity'>('created');
   const tatIsCall = tat === 'activity';
-  const tatData = d?.tat?.[tat];
-  const staleRows: { stage: string; metric: DrillMetric; total: number; stale: number; share: number | null; untouched: number }[] = k ? [
-    { stage: 'New', metric: 'stale_new', total: k.new_total, stale: k.stale_new, share: k.new_total ? (k.stale_new / k.new_total) * 100 : null, untouched: k.stale_new_untouched },
-    { stage: 'Not Connected', metric: 'stale_not_connected', total: k.nc_total, stale: k.stale_nc, share: k.nc_total ? (k.stale_nc / k.nc_total) * 100 : null, untouched: k.stale_nc_untouched },
+  const tatData = rd?.tat?.[tat];
+  const staleRows: { stage: string; metric: DrillMetric; total: number; stale: number; share: number | null; untouched: number }[] = rk ? [
+    { stage: 'New', metric: 'stale_new', total: rk.new_total, stale: rk.stale_new, share: rk.new_total ? (rk.stale_new / rk.new_total) * 100 : null, untouched: rk.stale_new_untouched },
+    { stage: 'Not Connected', metric: 'stale_not_connected', total: rk.nc_total, stale: rk.stale_nc, share: rk.nc_total ? (rk.stale_nc / rk.nc_total) * 100 : null, untouched: rk.stale_nc_untouched },
   ] : [];
   const open = (metric: DrillMetric, title: string, dim?: string, value?: string, subtitle?: string) => setDrill({ metric, title, dim, value, subtitle, summary: !dim });
   // academic-year split under a conversion KPI: the three latest years, the rest folded into "other" (sorted by year, latest first)
@@ -129,7 +145,7 @@ export default function Overview() {
   });
 
   const dimCard = (title: string, rows: DimRow[] | undefined, dim: ListDim, measures: [Measure, Measure?], tone: string, opts: DimCardOpts = {}) => (
-    <DimCard key={title} title={title} rows={rows} dim={dim} measures={measures} tone={tone} opts={opts} loading={q.isLoading} error={q.error} onRetry={q.refetch}
+    <DimCard key={title} title={title} rows={rows} dim={dim} measures={measures} tone={tone} opts={opts} loading={restLoading} error={r.error} onRetry={r.refetch}
       def={def} selected={f.lists[dim] ?? []} toggleValue={toggleValue} setList={setList} />
   );
 
@@ -202,18 +218,20 @@ export default function Overview() {
         </ChartCard>
       </div>
 
+      <div ref={restRef} />
+      {r.error && <Note>⚠ {r.error.message}</Note>}
       <div className="grid gap-4 xl:grid-cols-2">
-        {dimCard('Touch point analysis', d?.touch_point, 'touch_point', ['touches', 'converted'], 'tone-teal', { colorful: true, height: 270 })}
-        {dimCard('Lead source distribution', d?.source, 'source', ['leads', 'converted'], 'tone-orange', { asTable: true, height: 270, subtitle: 'Total leads by the source of their FIRST touch in the selection · each lead once · click rows to filter the other cards', help: 'A split of Total leads: each lead is counted once, under the source recorded on its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch, so the Total leads column adds up to the page total. Total lead touches = every touch carrying that source, including later touches of leads first touched elsewhere. Converted = the dashboard rule for the lead.' })}
-        {dimCard('Class (Lead Master)', d?.class_raw, 'class_raw', ['touches', 'converted'], 'tone-violet', { limit: 14, height: 300, colorful: true, help: 'The Class field on the Salesforce lead record (Lead Master), not the interested course and not the purchased course: lead touches in the window of converted leads, grouped by that class. Purchased course and grade are on the Converted page; interested courses have their own card and filter.' })}
-        {dimCard('LM Reason', d?.lm_reason, 'lm_reason', ['leads'], 'tone-amber', { limit: 14, height: 300, help: def.lm_reason, subtitle: 'Total leads by the LM Reason field on the lead · click a row to filter every card' })}
-        {dimCard('Interested course', d?.ic_course, 'ic_course', ['leads', 'converted'], 'tone-pink', { asTable: true, height: 300, help: def.ic_course, subtitle: 'Total leads by the course on their Interested Course records (interest, not purchase) · a lead with several courses appears under each · click rows to filter every page (multi-select)' })}
-        {dimCard('Last call reason', d?.reason, 'call_reason', ['leads', 'converted'], 'tone-amber', { limit: 14, height: 300, help: def.reason, subtitle: 'Total leads by the reason recorded on their last call · click a row to filter every card' })}
-        {dimCard('Medium', d?.medium, 'medium', ['leads', 'converted'], 'tone-green', { asTable: true, height: 260, subtitle: 'Total leads by the medium of their FIRST touch in the selection · each lead once', help: 'A split of Total leads: each lead once, under the medium of its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch. Total lead touches = every touch carrying that medium.' })}
-        {dimCard('Campaign name', d?.campaign, 'campaign', ['leads', 'touches'], 'tone-brand', { asTable: true, height: 260, subtitle: 'Total leads by the campaign of their FIRST touch in the selection · each lead once', help: 'A split of Total leads: each lead once, under the campaign of its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch. Total lead touches = every touch of that campaign.' })}
-        {dimCard('Staff-wise', d?.staff, 'staff', ['leads', 'touches'], 'tone-pink', { asTable: true, height: 300, subtitle: 'Total leads by the staff of their FIRST touch in the selection · each lead once', help: 'A split of Total leads: each lead once, under the staff recorded on its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch. Total lead touches = every touch of that staff.' })}
-        <ChartCard title="Leads still waiting in a stage" tone="tone-red" loading={q.isLoading} error={q.error} rows={staleRows} height={240}
-          subtitle={`still in the stage, created more than ${k?.stale_days ?? staleDays} days ago and not touched in the last ${k?.stale_days ?? staleDays} days · click a row for the leads`}
+        {dimCard('Touch point analysis', rd?.touch_point, 'touch_point', ['touches', 'converted'], 'tone-teal', { colorful: true, height: 270 })}
+        {dimCard('Lead source distribution', rd?.source, 'source', ['leads', 'converted'], 'tone-orange', { asTable: true, height: 270, subtitle: 'Total leads by the source of their FIRST touch in the selection · each lead once · click rows to filter the other cards', help: 'A split of Total leads: each lead is counted once, under the source recorded on its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch, so the Total leads column adds up to the page total. Total lead touches = every touch carrying that source, including later touches of leads first touched elsewhere. Converted = the dashboard rule for the lead.' })}
+        {dimCard('Class (Lead Master)', rd?.class_raw, 'class_raw', ['touches', 'converted'], 'tone-violet', { limit: 14, height: 300, colorful: true, help: 'The Class field on the Salesforce lead record (Lead Master), not the interested course and not the purchased course: lead touches in the window of converted leads, grouped by that class. Purchased course and grade are on the Converted page; interested courses have their own card and filter.' })}
+        {dimCard('LM Reason', rd?.lm_reason, 'lm_reason', ['leads'], 'tone-amber', { limit: 14, height: 300, help: def.lm_reason, subtitle: 'Total leads by the LM Reason field on the lead · click a row to filter every card' })}
+        {dimCard('Interested course', rd?.ic_course, 'ic_course', ['leads', 'converted'], 'tone-pink', { asTable: true, height: 300, help: def.ic_course, subtitle: 'Total leads by the course on their Interested Course records (interest, not purchase) · a lead with several courses appears under each · click rows to filter every page (multi-select)' })}
+        {dimCard('Last call reason', rd?.reason, 'call_reason', ['leads', 'converted'], 'tone-amber', { limit: 14, height: 300, help: def.reason, subtitle: 'Total leads by the reason recorded on their last call · click a row to filter every card' })}
+        {dimCard('Medium', rd?.medium, 'medium', ['leads', 'converted'], 'tone-green', { asTable: true, height: 260, subtitle: 'Total leads by the medium of their FIRST touch in the selection · each lead once', help: 'A split of Total leads: each lead once, under the medium of its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch. Total lead touches = every touch carrying that medium.' })}
+        {dimCard('Campaign name', rd?.campaign, 'campaign', ['leads', 'touches'], 'tone-brand', { asTable: true, height: 260, subtitle: 'Total leads by the campaign of their FIRST touch in the selection · each lead once', help: 'A split of Total leads: each lead once, under the campaign of its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch. Total lead touches = every touch of that campaign.' })}
+        {dimCard('Staff-wise', rd?.staff, 'staff', ['leads', 'touches'], 'tone-pink', { asTable: true, height: 300, subtitle: 'Total leads by the staff of their FIRST touch in the selection · each lead once', help: 'A split of Total leads: each lead once, under the staff recorded on its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch. Total lead touches = every touch of that staff.' })}
+        <ChartCard title="Leads still waiting in a stage" tone="tone-red" loading={restLoading} error={r.error} rows={staleRows} height={240}
+          subtitle={`still in the stage, created more than ${rk?.stale_days ?? staleDays} days ago and not touched in the last ${rk?.stale_days ?? staleDays} days · click a row for the leads`}
           help={`${def.stale_new ?? ''} ${def.stale_nc ?? ''}`}
           actions={<div className="flex items-center gap-1 text-[11px] text-ink-2">
             <span>Days</span>
@@ -221,12 +239,12 @@ export default function Overview() {
             <input type="number" min={1} max={365} className="input !w-16 !py-0.5" title="any number of days" value={staleDays} onChange={(e) => changeStale(Number(e.target.value))} />
           </div>}>
           <DataTable rows={staleRows} compact maxHeight="100%" rowKey={(r) => r.stage}
-            onRowClick={(r) => setDrill({ metric: r.metric, title: `Still ${r.stage} after ${k?.stale_days ?? staleDays} days`, extra: { stale_days: k?.stale_days ?? staleDays }, summary: true,
-              subtitle: `leads still in stage ${r.stage}, created more than ${k?.stale_days ?? staleDays} days ago and not touched in the last ${k?.stale_days ?? staleDays} days · sorted by last touch` })}
+            onRowClick={(r) => setDrill({ metric: r.metric, title: `Still ${r.stage} after ${rk?.stale_days ?? staleDays} days`, extra: { stale_days: rk?.stale_days ?? staleDays }, summary: true,
+              subtitle: `leads still in stage ${r.stage}, created more than ${rk?.stale_days ?? staleDays} days ago and not touched in the last ${rk?.stale_days ?? staleDays} days · sorted by last touch` })}
             columns={[
               { key: 'stage', header: 'Stage' },
               { key: 'total', header: 'Leads in the stage', align: 'right' },
-              { key: 'stale', header: `Still there after ${k?.stale_days ?? staleDays} days`, align: 'right', bar: true },
+              { key: 'stale', header: `Still there after ${rk?.stale_days ?? staleDays} days`, align: 'right', bar: true },
               { key: 'share', header: 'Share', align: 'right', render: (v) => fmtPct(v as number) },
               { key: 'untouched', header: 'Never touched after creation', align: 'right' },
             ]} />
@@ -234,10 +252,10 @@ export default function Overview() {
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <ChartCard title="Touches per day" tone="tone-teal" subtitle="touches, distinct leads and converted leads by touch date · click a point to zoom the date range to that day" loading={q.isLoading} error={q.error} rows={d?.daily ?? []} height={260}>
-          <DailyLines data={(d?.daily ?? []).map((r) => ({ d: r.d.slice(5), touches: r.touches, leads: r.leads, converted: r.converted }))} xKey="d" lines={[{ key: 'touches', label: 'Touches' }, { key: 'leads', label: 'Leads' }, { key: 'converted', label: 'Converted' }]} onClick={(key) => { const row = (d?.daily ?? []).find((r) => r.d.slice(5) === key); if (row) set({ preset: 'custom', from: row.d, to: row.d }); }} />
+        <ChartCard title="Touches per day" tone="tone-teal" subtitle="touches, distinct leads and converted leads by touch date · click a point to zoom the date range to that day" loading={restLoading} error={r.error} rows={rd?.daily ?? []} height={260}>
+          <DailyLines data={(rd?.daily ?? []).map((r) => ({ d: r.d.slice(5), touches: r.touches, leads: r.leads, converted: r.converted }))} xKey="d" lines={[{ key: 'touches', label: 'Touches' }, { key: 'leads', label: 'Leads' }, { key: 'converted', label: 'Converted' }]} onClick={(key) => { const row = (rd?.daily ?? []).find((r) => r.d.slice(5) === key); if (row) set({ preset: 'custom', from: row.d, to: row.d }); }} />
         </ChartCard>
-        <ChartCard title="Turnaround time" tone="tone-green" help={def.tat} loading={q.isLoading} error={q.error} rows={tatData?.buckets ?? []} height={240}
+        <ChartCard title="Turnaround time" tone="tone-green" help={def.tat} loading={restLoading} error={r.error} rows={tatData?.buckets ?? []} height={240}
           subtitle={tatData ? `${fmtInt(tatData.leads)} ${tatIsCall ? 'leads' : 'converted leads'} · median ${tatData.median_days == null ? '–' : fmt1(tatData.median_days)} d · average ${tatData.avg_days == null ? '–' : fmt1(tatData.avg_days)} d${tatIsCall ? ' (leads with an activity)' : ''} · click a band for the leads` : tatIsCall ? 'days from the first touch in the range to the first activity on or after it' : 'days to the first payment, converted leads only'}
           actions={<Segmented size="xs" value={tat} onChange={setTat} options={[
             { value: 'created', label: 'Lead created → paid', title: 'days from the lead\'s creation day to its first valid payment day' },

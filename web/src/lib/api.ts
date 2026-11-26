@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
-import { useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
 import type { Envelope } from './types';
 
 export class ApiError extends Error {
@@ -53,10 +53,19 @@ export function useApi<T>(path: string, params: Params = {}, opts: Partial<UseQu
   const q = useQuery<Envelope<T>, ApiError>({
     queryKey,
     queryFn: () => apiFetch<T>(path, params),
+    // a filter change (2026-11-26): keep the cards' current answer on screen while the new one loads, instead of blanking every card;
+    // the header shows "Updating…" meanwhile (below)
+    placeholderData: keepPreviousData,
     ...opts,
   });
   const stale = q.data?.stale === true;
   const id = JSON.stringify(queryKey);
+  const waiting = q.isPlaceholderData && q.isFetching;
+  useEffect(() => {
+    if (!waiting) return;
+    setUpdating(1);
+    return () => setUpdating(-1);
+  }, [waiting]);
   useEffect(() => {
     if (!stale || revalidating.has(id)) return;
     revalidating.add(id); setUpdating(1);

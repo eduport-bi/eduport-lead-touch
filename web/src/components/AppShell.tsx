@@ -89,7 +89,7 @@ export function AppShell() {
                 </tbody></table>
               </div>
             </Popover>
-            {updating && <span className="chip animate-pulse border-accent/40 text-accent" title="Showing the numbers from before the last data refresh; the new numbers replace them in a moment">Updating…</span>}
+            {updating && <span className="chip animate-pulse border-accent/40 text-accent" title="Showing the previous numbers (before the last filter change or data refresh); the new numbers replace them in a moment">Updating…</span>}
           </div>
           <div className="flex items-center gap-2">
             {user?.role === 'admin' && <SyncButton />}
