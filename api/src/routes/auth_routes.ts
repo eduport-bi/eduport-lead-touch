@@ -150,6 +150,70 @@ authRoutes.delete('/auth/filter', async (c) => {
   } finally { release(sql, c.executionCtx); }
 });
 
+// ---------------------------------------------------------------- named filter views (sql/053, 2026-11-26), like Google Sheets filter views
+// Any number per user; a view marked shared is listed for everyone ("Team views") but only its owner can change or delete it.
+// The name is unique per owner (case-insensitive). The query is the filter bar's URL query string, as in user_filters.
+const ViewNew = z.object({ name: z.string().trim().min(1).max(80), query: z.string().max(4000), shared: z.boolean().default(false) });
+const ViewPatch = z.object({ name: z.string().trim().min(1).max(80).optional(), query: z.string().max(4000).optional(), shared: z.boolean().optional() });
+type ViewRow = { id: string; name: string; query: string; shared: boolean; owner_email: string; owner_name: string | null; updated_at: string; mine: boolean };
+const viewError = (e: unknown) => (e as { code?: string })?.code === '23505'
+  ? Object.assign(new Error('You already have a view with that name'), { status: 400 }) : e;
+
+/** GET /auth/views : the caller's views and the team's shared views */
+authRoutes.get('/auth/views', async (c) => {
+  const me = c.get('user').email.toLowerCase();
+  const sql = getSql(c.env);
+  try {
+    const rows = await sql<ViewRow[]>`
+      SELECT v.id::text, v.name, v.query, v.shared, v.email AS owner_email, NULLIF(u.name, '') AS owner_name, v.updated_at::text,
+             (v.email = ${me}) AS mine
+      FROM app_auth.filter_views v LEFT JOIN app_auth.users u ON lower(u.email) = v.email
+      WHERE (v.email = ${me} OR v.shared) AND v.updated_at <= now()
+      ORDER BY (v.email = ${me}) DESC, lower(v.name)`;
+    return c.json({ data: { views: rows } });
+  } finally { release(sql, c.executionCtx); }
+});
+/** POST /auth/views { name, query, shared } : save the current filters as a new named view */
+authRoutes.post('/auth/views', async (c) => {
+  const me = c.get('user').email.toLowerCase(); const b = await body(c, ViewNew);
+  const sql = getSql(c.env);
+  try {
+    const [n] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM app_auth.filter_views WHERE email = ${me}`;
+    if ((n?.n ?? 0) >= 50) return bad(c, 'At most 50 views per person; delete one first');
+    let id: string | undefined;
+    try { const [r] = await sql<{ id: string }[]>`INSERT INTO app_auth.filter_views (email, name, query, shared) VALUES (${me}, ${b.name}, ${b.query}, ${b.shared ?? false}) RETURNING id::text`; id = r?.id; }
+    catch (e) { throw viewError(e); }
+    return c.json({ data: { id } });
+  } finally { release(sql, c.executionCtx); }
+});
+/** PUT /auth/views/:id { name?, query?, shared? } : rename, overwrite with the current filters, share / unshare (owner only) */
+authRoutes.put('/auth/views/:id', async (c) => {
+  const me = c.get('user').email.toLowerCase(); const b = await body(c, ViewPatch); const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return bad(c, 'bad view id');
+  const sql = getSql(c.env);
+  try {
+    let rows: readonly unknown[];
+    try {
+      rows = await sql`UPDATE app_auth.filter_views SET name = COALESCE(${b.name ?? null}, name), query = COALESCE(${b.query ?? null}, query),
+                         shared = COALESCE(${b.shared ?? null}, shared), updated_at = now()
+                       WHERE id = ${id} AND email = ${me} RETURNING id`;
+    } catch (e) { throw viewError(e); }
+    if (!rows.length) return c.json({ error: { code: 'not_found', message: 'View not found, or it is not yours' } }, 404);
+    return c.json({ data: { ok: true } });
+  } finally { release(sql, c.executionCtx); }
+});
+/** DELETE /auth/views/:id : delete one of the caller's views */
+authRoutes.delete('/auth/views/:id', async (c) => {
+  const me = c.get('user').email.toLowerCase(); const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return bad(c, 'bad view id');
+  const sql = getSql(c.env);
+  try {
+    const rows = await sql`DELETE FROM app_auth.filter_views WHERE id = ${id} AND email = ${me} RETURNING id`;
+    if (!rows.length) return c.json({ error: { code: 'not_found', message: 'View not found, or it is not yours' } }, 404);
+    return c.json({ data: { ok: true } });
+  } finally { release(sql, c.executionCtx); }
+});
+
 /** POST /auth/password { current, password } : change own password; other sessions are signed out */
 authRoutes.post('/auth/password', async (c) => {
   const me = c.get('user'); if (!me.id) return bad(c, 'not available in this mode');

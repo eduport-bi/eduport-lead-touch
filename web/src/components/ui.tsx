@@ -34,7 +34,9 @@ export class ErrorBoundary extends Component<{ children: ReactNode; label?: stri
 }
 
 /** Minimal popover anchored to its trigger */
-export function Popover({ trigger, children, align = 'left', width = 'w-80' }: { trigger: ReactNode; children: ReactNode | ((close: () => void) => ReactNode); align?: 'left' | 'right'; width?: string }) {
+export function Popover({ trigger, children, align = 'left', width = 'w-80', block = false }: { trigger: ReactNode; children: ReactNode | ((close: () => void) => ReactNode); align?: 'left' | 'right'; width?: string;
+  /** fill the parent's width (a box of the filter pane grid) instead of shrinking to the trigger */
+  block?: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -45,8 +47,8 @@ export function Popover({ trigger, children, align = 'left', width = 'w-80' }: {
     return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
   }, [open]);
   return (
-    <div className="relative inline-block" ref={ref}>
-      <span onClick={() => setOpen((o) => !o)}>{trigger}</span>
+    <div className={`relative ${block ? 'block h-full w-full min-w-0' : 'inline-block'}`} ref={ref}>
+      <span className={block ? 'block h-full w-full' : undefined} onClick={() => setOpen((o) => !o)}>{trigger}</span>
       {open && (
         <div className={`absolute z-40 mt-1 ${align === 'right' ? 'right-0' : 'left-0'} ${width} rounded-xl border border-line bg-surface p-3 shadow-pop`}>
           {typeof children === 'function' ? children(() => setOpen(false)) : children}

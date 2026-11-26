@@ -14,7 +14,7 @@ interface Resp {
   period: { from: string; to: string };
   kpis: { users: number; new_users: number; no_touch: number; no_lead: number; payments_all: number; revenue_all: number; sales: number; sales_app: number; sales_ujra: number; touches: number; no_touch_pct: number | null; no_lead_pct: number | null; };
   class_mix: { lead_class: string; bought_class: string; users: number }[];
-  class_kpi: { mismatch_users: number; with_class_users: number; no_class_users: number; mismatch_pct: number | null };
+  class_kpi: { mismatch_users: number; with_class_users: number; no_class_users: number; no_stream_users: number; mismatch_pct: number | null };
   class_on: 'lead' | 'bought';
   by_stage: Dim[]; by_last_touch_point: Dim[]; by_last_source: Dim[]; by_last_medium: Dim[]; by_last_campaign: Dim[]; by_last_staff: Dim[]; by_course: Dim[]; by_grade: Dim[];
   by_first_touch_point: Dim[]; by_first_source: Dim[]; by_first_medium: Dim[]; by_first_campaign: Dim[]; by_first_staff: Dim[];
@@ -75,6 +75,29 @@ function ConvCard({ title, rows, tone, opts, cols, loading, error, onRetry, help
 }
 
 /** Tableau "Lead Touch - Converted": paying users by payment date, credited to their last touch before the payment. */
+/** Same-class rule of the Bought a different class tile (user rules 2026-11-26; mirrors api/src/filters.ts sameClass) for the matrix: which
+ *  cells count as the same class, and why. Outlined cells are not counted as different. */
+const num = (v: string) => /^Class (\d+)/.exec(v)?.[1] ?? null;
+type Rule = 'excluded' | 'same' | 'no_stream' | 'cbse' | 'no_board' | 'crash' | 'different';
+function classRule(lead: string, bought: string): Rule {
+  if (['Unknown', 'No Salesforce Lead'].includes(lead) || bought === 'Integrated') return 'excluded';
+  if (lead === bought) return 'same';
+  if (/^Class 1[12] \(no stream\)$/.test(lead) && num(bought) === num(lead)) return 'no_stream';
+  if (/^Class 1[12] CBSE$/.test(lead) && /^Class 1[12] (Science|Commerce|Humanities) CBSE$/.test(bought) && num(bought) === num(lead)) return 'cbse';
+  if (/^Class ([7-9]|10)$/.test(bought) && num(bought) === num(lead)) return 'no_board';
+  if (['KEAM/JEE Crash', 'NEET Crash', 'Repeater', 'Plus Two Completed'].includes(bought) && (['Plus Two Completed', 'Repeater', 'KEAM/JEE Crash', 'NEET Crash'].includes(lead) || num(lead) === '12')) return 'crash';
+  return 'different';
+}
+const RULE_TEXT: Record<Rule, string> = {
+  excluded: 'not counted (no lead class, or an Ujra booking)',
+  same: 'same class',
+  no_stream: 'counted as the same class: the lead has no stream, so any stream of that class matches',
+  cbse: 'counted as the same class: CBSE lead with no stream, CBSE course of that class',
+  no_board: 'counted as the same class: the course name gives no board',
+  crash: 'counted as the same class: crash / repeater course for a Plus Two track lead',
+  different: 'different class',
+};
+
 export default function Converted() {
   const { f, params, toggleValue, setList } = useFilters();
   // (the Purchased grade picker was removed 2026-11-24: the filter bar's Class filter on Purchased class covers it; the grade card drills instead)
@@ -148,9 +171,9 @@ export default function Converted() {
       <ChartCard title="Lead class vs purchased class" tone="tone-amber" loading={q.isLoading} error={q.error} rows={d?.class_mix ?? []} height={Math.max(260, classRows.length * 24 + 170)} fitContent help={def.class_mix}
         subtitle={`paying users · rows = class on the Salesforce lead, columns = class of the course bought in the window · off the diagonal = a different class · click a cell for the users`}>
         <Heatmap rows={classRows} cols={classCols} rowLabel="Lead class ↓" colLabel="Purchased class"
-          get={(r, c) => mixMap.get(`${r}||${c}`) ?? null} mark={(r, c) => r === c}
+          get={(r, c) => mixMap.get(`${r}||${c}`) ?? null} mark={(r, c) => !['different', 'excluded'].includes(classRule(r, c))}
           verticalCols
-          cellTitle={(r, c, v) => `${r} lead → bought ${c}: ${v == null ? 0 : fmtInt(v)} users${r === c ? ' (same class)' : ''}`}
+          cellTitle={(r, c, v) => `${r} lead → bought ${c}: ${v == null ? 0 : fmtInt(v)} users · ${RULE_TEXT[classRule(r, c)]}`}
           onClick={(r, c) => { if (mixMap.get(`${r}||${c}`)) open(`Lead ${r} · bought ${c}`, 'class_mix', `${r}||${c}`, `users whose Salesforce lead says ${r} and who bought a ${c} course in the window · click a row for the lead record`); }} />
       </ChartCard>
 

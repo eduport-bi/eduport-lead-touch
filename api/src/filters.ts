@@ -226,20 +226,41 @@ export function classPopulation(sql: Sql, leadRef: Frag, f: Filters, bases: stri
 }
 
 /**
+ * Lead class vs purchased class: are they the SAME class? (user rules 2026-11-26, full names, replacing the base-class match)
+ *   1. full name: "Class 12 Science" vs "Class 12 Commerce" or "Class 12 Science CBSE" = different; "Class 10 Board" vs "Class 10 CBSE" = different
+ *   2. lead "Class 11 (no stream)" / "Class 12 (no stream)": any purchase of that class number (any stream, Board or CBSE) = same, because the
+ *      lead's stream is unknown (these buyers are reported apart: noStreamCovered)
+ *   3. lead "Class 11 CBSE" / "Class 12 CBSE" (no stream): same only for a Class 11/12 Science, Commerce or Humanities CBSE purchase
+ *   4. Class 4 / 5 / 6 have no board split on either side: same name = same
+ *   5. crash rule: a KEAM/JEE Crash, NEET Crash, Repeater or Plus Two Completed course matches Class 12, Plus Two Completed, Repeater and crash leads
+ *   (a purchase with no board in its name, "Class 7".."Class 10" from a course title without one, matches either board of that class number)
+ * No "moved up a year" rule: a Class 11 lead buying Class 12 is different. Unknown / No Salesforce lead / Integrated (Ujra) are excluded by the callers.
+ */
+export function sameClass(sql: Sql, lead: Frag, bought: Frag): Frag {
+  const num = (x: Frag) => sql`substring(${x} from '^Class ([0-9]+)')`;
+  return sql`(${bought} = ${lead}
+    OR (${lead} ~ '^Class 1[12] \\(no stream\\)$' AND ${num(bought)} = ${num(lead)})
+    OR (${lead} ~ '^Class 1[12] CBSE$' AND ${bought} ~ '^Class 1[12] (Science|Commerce|Humanities) CBSE$' AND ${num(bought)} = ${num(lead)})
+    OR (${bought} ~ '^Class ([7-9]|10)$' AND ${num(bought)} = ${num(lead)})
+    OR (${bought} IN ('KEAM/JEE Crash', 'NEET Crash', 'Repeater', 'Plus Two Completed')
+        AND (${lead} IN ('Plus Two Completed', 'Repeater', 'KEAM/JEE Crash', 'NEET Crash') OR ${num(lead)} = '12')))`;
+}
+/** rule 2's buyers: lead "Class 11/12 (no stream)" with a purchase of that class number (counted as the same class, reported apart) */
+export function noStreamCovered(sql: Sql, lead: Frag, bought: Frag): Frag {
+  return sql`(${lead} ~ '^Class 1[12] \\(no stream\\)$' AND substring(${bought} from '^Class ([0-9]+)') = substring(${lead} from '^Class ([0-9]+)'))`;
+}
+
+/**
  * Tick box "Lead class = purchased class" (filter class_match=1, 2026-11-25): leave out MISMATCHED BUYERS - leads with a known class
- * that paid for courses, none of them of the lead's class. Leads that did not buy stay (so conversion rates keep their base). Same match
- * as the Converted page's "Bought a different class" tile: base class ("Class 10 Board" = a Class 10 batch); a crash / repeater course
- * matches Class 12, Plus Two Completed, Repeater and crash leads; Ujra bookings are not in mv_lead_class_pay, so they never mismatch.
+ * that paid for courses, none of them the same class as the lead (sameClass above: full names, user rules 2026-11-26). Leads that did not
+ * buy stay (so conversion rates keep their base); a lead "Class 11/12 (no stream)" buying any Class 11/12 course stays (stream unknown).
+ * Ujra bookings are not in mv_lead_class_pay, so they never mismatch.
  */
 export function classMatchKeep(sql: Sql, leadRef: Frag, leadClass: Frag): Frag {
-  const base = sql`COALESCE(substring(${leadClass} from '^Class [0-9]+'), ${leadClass})`;
   return sql`NOT (
-    ${leadClass} IS NOT NULL AND ${base} NOT IN ('Unknown', 'Other')
+    ${leadClass} IS NOT NULL AND ${leadClass} NOT IN ('Unknown', 'Other')
     AND EXISTS (SELECT 1 FROM analytics.mv_lead_class_pay cp WHERE cp.lead_id = ${leadRef})
-    AND NOT EXISTS (SELECT 1 FROM analytics.mv_lead_class_pay cp WHERE cp.lead_id = ${leadRef}
-                    AND (cp.base_class = ${base}
-                         OR (cp.base_class IN ('KEAM/JEE Crash', 'NEET Crash', 'Repeater', 'Plus Two Completed')
-                             AND ${base} IN ('Class 12', 'Plus Two Completed', 'Repeater', 'KEAM/JEE Crash', 'NEET Crash')))))`;
+    AND NOT EXISTS (SELECT 1 FROM analytics.mv_lead_class_pay cp WHERE cp.lead_id = ${leadRef} AND ${sameClass(sql, leadClass, sql`cp.purchased_class`)}))`;
 }
 
 export interface BuildOpts {

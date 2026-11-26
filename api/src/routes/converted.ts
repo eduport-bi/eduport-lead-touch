@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Sql } from 'postgres';
 import type { AppEnv, Role } from '../env';
 import { handle, intParam, maskEmail, maskName, maskPhone, pct, csvStream, timedAll } from '../http';
-import { LIST_KEYS, parseFilters, resolvePeriods, type Filters, type Frag, type Period } from '../filters';
+import { LIST_KEYS, parseFilters, resolvePeriods, sameClass, noStreamCovered, type Filters, type Frag, type Period } from '../filters';
 import { shapeTat, tatBucket, type TatRow } from './overview';
 
 /**
@@ -83,12 +83,13 @@ function payRestrict(sql: Sql, q: Record<string, string>, skip?: string): Frag {
 // grade + course title (analytics.purchase_class, sql/052: "Class 10 CBSE", "Class 12 Science" ...). The mismatch tile stays on the base class.
 const LEAD_CLASS = (sql: Sql) => sql`(CASE WHEN m.no_lead THEN 'No Salesforce Lead' ELSE COALESCE(m.class_group, 'Unknown') END)`;
 const BOUGHT_CLASS = (sql: Sql) => sql`(CASE WHEN hp.source = 'ujra' THEN 'Integrated' ELSE analytics.purchase_class(b.grade_title, b.course_title) END)`;
-const LEAD_BASE = (sql: Sql) => sql`COALESCE(substring(${LEAD_CLASS(sql)} from '^Class [0-9]+'), ${LEAD_CLASS(sql)})`;
-const BOUGHT_BASE = (sql: Sql) => sql`COALESCE(substring(${BOUGHT_CLASS(sql)} from '^Class [0-9]+'), ${BOUGHT_CLASS(sql)})`;
-/** a user bought a class other than the lead's (users whose lead has no class, and Integrated bookings, are not counted as mismatches;
- *  a crash course is the Class 12 / Plus Two Completed / Repeater track, so it matches those leads) */
-const MISMATCH = (sql: Sql) => sql`${LEAD_BASE(sql)} NOT IN ('Unknown', 'No Salesforce Lead') AND ${BOUGHT_BASE(sql)} NOT IN (${LEAD_BASE(sql)}, 'Integrated')
-  AND NOT (${BOUGHT_BASE(sql)} IN ('KEAM/JEE Crash', 'NEET Crash', 'Repeater', 'Plus Two Completed') AND ${LEAD_BASE(sql)} IN ('Class 12', 'Plus Two Completed', 'Repeater', 'KEAM/JEE Crash', 'NEET Crash'))`;
+/** a user bought a class other than the lead's: FULL class names (filters.ts sameClass, user rules 2026-11-26: streams and Board / CBSE
+ *  differ; a "(no stream)" lead matches any stream of its class number; crash courses match Class 12 / Plus Two Completed / Repeater leads).
+ *  Users whose lead has no class, and Integrated (Ujra) bookings, are never counted. */
+const MISMATCH = (sql: Sql) => sql`${LEAD_CLASS(sql)} NOT IN ('Unknown', 'No Salesforce Lead') AND ${BOUGHT_CLASS(sql)} <> 'Integrated'
+  AND NOT ${sameClass(sql, LEAD_CLASS(sql), BOUGHT_CLASS(sql))}`;
+/** rule 2's buyers: "Class 11/12 (no stream)" leads who bought that class number; not counted as different, reported in the tile's caption */
+const NO_STREAM_COVERED = (sql: Sql) => sql`${BOUGHT_CLASS(sql)} <> 'Integrated' AND ${noStreamCovered(sql, LEAD_CLASS(sql), BOUGHT_CLASS(sql))}`;
 /** payments of the user inside the window (payment method switch applied), with the batch for the grade: the base of the class-mix checks */
 const userPayments = (sql: Sql, p: Period, pm: PayMethod) => sql`analytics.v_payment_all hp LEFT JOIN app.core_batch b ON b.id = COALESCE(hp.enrollment_batch_id, hp.batch_id)
   WHERE hp.user_id = m.user_id AND ${VALID(sql, pm)} AND hp.payment_date BETWEEN ${p.from} AND ${p.to}`;
@@ -185,7 +186,7 @@ converted.get('/converted', (c) =>
       GROUP BY 1 ORDER BY users DESC LIMIT 2000`;
     // lead class vs purchased class: one row per (user, lead base class, bought base class) for the payments inside the window
     const mixRows = sql`
-      SELECT DISTINCT m.user_id, ${LEAD_CLASS(sql)} AS lead_class, ${BOUGHT_CLASS(sql)} AS bought_class, (${MISMATCH(sql)}) AS mismatch
+      SELECT DISTINCT m.user_id, ${LEAD_CLASS(sql)} AS lead_class, ${BOUGHT_CLASS(sql)} AS bought_class, (${MISMATCH(sql)}) AS mismatch, (${NO_STREAM_COVERED(sql)}) AS no_stream
       FROM analytics.mv_payer m JOIN analytics.v_payment_all hp ON hp.user_id = m.user_id LEFT JOIN app.core_batch b ON b.id = COALESCE(hp.enrollment_batch_id, hp.batch_id)
       WHERE ${w} AND ${V} AND ${R} AND hp.payment_date BETWEEN ${p.from} AND ${p.to}`;
     const [[k], [pk], byStage, byPoint, bySource, byMedium, byCampaign, byStaff, byCourse, byGrade, daily, grades, tatRows, firstRows, appPrevRows, classMix, [classKpi]] = await timedAll(
@@ -239,11 +240,12 @@ converted.get('/converted', (c) =>
       firstP, appPrevP,
       sql<{ lead_class: string; bought_class: string; users: number }[]>`
         WITH x AS (${mixRows}) SELECT lead_class, bought_class, count(DISTINCT user_id)::int AS users FROM x GROUP BY 1, 2`,
-      sql<{ mismatch_users: number; with_class_users: number; no_class_users: number }[]>`
+      sql<{ mismatch_users: number; with_class_users: number; no_class_users: number; no_stream_users: number }[]>`
         WITH x AS (${mixRows})
         SELECT count(DISTINCT user_id) FILTER (WHERE mismatch)::int AS mismatch_users,
                count(DISTINCT user_id) FILTER (WHERE lead_class NOT IN ('Unknown', 'No Salesforce Lead'))::int AS with_class_users,
-               count(DISTINCT user_id) FILTER (WHERE lead_class = 'Unknown')::int AS no_class_users
+               count(DISTINCT user_id) FILTER (WHERE lead_class = 'Unknown')::int AS no_class_users,
+               count(DISTINCT user_id) FILTER (WHERE no_stream AND NOT mismatch)::int AS no_stream_users
         FROM x`,
     ]);
     const appPrevTot = appPrevRows.reduce((s, r) => s + r.users, 0);
@@ -285,7 +287,7 @@ converted.get('/converted', (c) =>
         course: 'Users by the course they bought; a user buying two courses appears under both. The course is the one of the batch on the payment\x27s ENROLLMENT (where the student is enrolled now), with " - Fastrack" / " - Booster" added from the batch name; the batch written on the payment is used only when the enrollment has none.',
         grade: 'Grade of the course that was bought (batch of the payment\x27s enrollment), not the class recorded on the lead.',
         class_mix: 'Paying users by the Class on their Salesforce lead (rows) and the class of the course they bought in the window (columns), both with the same names: the course class comes from its grade and course title (SSLC English Medium = Class 10 Board, Class 10 CBSE Tuition = Class 10 CBSE, Plus One Science (CBSE) = Class 11 Science CBSE, Foundation courses = CBSE, CUET crash = Class 12 + stream). Ujra bookings are Integrated. The diagonal is the same class; a user who bought two classes appears in both columns. Lead-only names (Class 11 (no stream), Plus Two Completed) have no matching column.',
-        class_mismatch: 'Users with a class on their lead who bought a course of a DIFFERENT base class in the window (for example a Class 12 lead buying a Class 7 batch). Leads with no class and Ujra (Integrated) bookings are not counted. % = of the users whose lead has a class.',
+        class_mismatch: 'Users with a class on their lead who bought, in the window, a course of a DIFFERENT class than the one on their lead. Full class names are compared: streams differ (Class 12 Science vs Class 12 Commerce) and so do Board and CBSE (Class 10 Board vs Class 10 CBSE). A lead marked Class 11 or Class 12 with no stream is NOT counted when it bought that class in any stream, Board or CBSE, because its stream is unknown (outlined in the Lead class vs purchased class matrix, with the reason in each cell tooltip). A lead marked Class 11 / 12 CBSE matches only a CBSE course of that class. Crash and repeater courses match Class 12, Plus Two Completed and Repeater leads. A Class 11 lead buying Class 12 counts as different. Leads with no class and Ujra (Integrated) bookings are not counted. % = of the users whose lead has a class.',
         class_on: 'Class filter (filter-bar switch): "Lead class" = the Class on the Salesforce lead; "Purchased class" = on this page, the class of a course bought in the window.',
         stage: 'Lead stage of the user\'s most recently created Salesforce lead (one lead per user).',
         revenue: 'Sum of payment amounts of the users in the row (all their valid payments, any method, any date).',

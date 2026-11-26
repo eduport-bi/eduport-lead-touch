@@ -178,8 +178,11 @@ export function useFilters() {
   /** forget the saved filter set */
   const forgetFilter = useCallback(async () => { await authCall('/auth/filter', { method: 'DELETE' }); setSavedQuery(null); }, []);
   const isSaved = savedQuery != null && savedQuery === serialize(f).toString();
+  /** the filter bar as a query string (what a named view stores), and applying one (a named view, 2026-11-26) */
+  const currentQuery = serialize(f).toString();
+  const applyQuery = useCallback((q: string) => setSp(new URLSearchParams(q), { replace: false }), [setSp]);
 
   const params = useMemo(() => toApiParams(f), [f]);
   const activeCount = Object.values(f.lists).filter((v) => v?.length).length + Object.values(f.flags).filter(Boolean).length + (f.paid ? 1 : 0) + (f.converted ? 1 : 0) + (f.pay ? 1 : 0) + (f.classMatch ? 1 : 0);
-  return { f, set, setList, toggleValue, clearAll, params, activeCount, saveFilter, forgetFilter, savedQuery, isSaved };
+  return { f, set, setList, toggleValue, clearAll, params, activeCount, saveFilter, forgetFilter, savedQuery, isSaved, currentQuery, applyQuery };
 }

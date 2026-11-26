@@ -121,7 +121,11 @@ export async function warmTargets(env: Env, ctx: FetchCtx): Promise<{ url: strin
     const rows: { query: string; role: string | null }[] = await withSql(env, ctx ?? { waitUntil: () => undefined }, (sql) => sql<{ query: string; role: string | null }[]>`
       SELECT f.query, u.role FROM app_auth.user_filters f
       LEFT JOIN app_auth.users u ON lower(u.email) = f.email AND u.is_active
-      WHERE f.saved_at <= now()`);   // now(): Hyperdrive would otherwise serve a 60 s old answer
+      WHERE f.saved_at <= now()
+      UNION   -- named filter views (sql/053): warmed as the owner's role; a shared view also as a full-access role, for the team
+      SELECT v.query, u.role FROM app_auth.filter_views v LEFT JOIN app_auth.users u ON lower(u.email) = v.email AND u.is_active WHERE v.updated_at <= now()
+      UNION
+      SELECT v.query, 'analyst' FROM app_auth.filter_views v WHERE v.shared AND v.updated_at <= now()`);   // now(): Hyperdrive would otherwise serve a 60 s old answer
     for (const r of rows) {
       const p = savedQueryToApi(r.query);
       if (!p) continue;
