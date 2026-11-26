@@ -94,7 +94,10 @@ export default function Overview() {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  const r = useApi<OverviewResponse>('/overview', { ...params, part: 'rest', stale_days: staleQ }, { enabled: restNear });
+  // the lower half starts only once the top half has its answer (2026-11-26): the two at once doubled the database connections of one
+  // visit, and the session pooler (15 clients) then refused requests ("internal error")
+  const topDone = q.isSuccess && !q.isFetching;
+  const r = useApi<OverviewResponse>('/overview', { ...params, part: 'rest', stale_days: staleQ }, { enabled: restNear && topDone });
   const d = q.data?.data;
   const rd = r.data?.data;
   const k = d?.kpis;
