@@ -101,7 +101,7 @@ function dimCond(sql: Sql, q: Record<string, string>, f?: Filters, p?: Period | 
   if (dim === 'conv_untouched') {
     // the never-touched part of the Overview's Total converted (value 'after') / Converted before the window ('before'): no touch on record and
     // the first valid payment (dashboard rule) on/after the lead's creation day and not before the window start / before the window start
-    const fp = sql`(SELECT min(vp.payment_date) FROM analytics.v_valid_payment_x vp WHERE vp.phone_key = l.phone_key)`;
+    const fp = sql`(SELECT pp.first_pay FROM analytics.mv_phone_pay pp WHERE pp.phone_key = l.phone_key)`;   // precomputed per phone (sql/054)
     const noTouch = sql`l.phone_valid AND NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id)`;
     const pp = f ? paymentPeriod(f) : null; const winFrom = pp?.from ?? p?.from ?? '1900-01-01';
     // purchased class: the date of the payment for the picked class (same rule as the Overview tiles)

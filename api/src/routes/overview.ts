@@ -213,7 +213,8 @@ overview.get('/overview', (c) =>
     const noTouch = f.basis === 'created'
       ? sql`NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id)`
       : sql`NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id AND t.touch_date BETWEEN ${periods.current.from} AND ${periods.current.to})`;
-    const untouched = sql`SELECT l.lead_id, l.created_date, (SELECT min(vp.payment_date) FROM analytics.v_valid_payment_x vp WHERE vp.phone_key = l.phone_key) AS first_pay
+    // first valid payment of the lead's number: precomputed per phone (analytics.mv_phone_pay, sql/054), one index lookup per lead
+    const untouched = sql`SELECT l.lead_id, l.created_date, (SELECT pp.first_pay FROM analytics.mv_phone_pay pp WHERE pp.phone_key = l.phone_key) AS first_pay
                           FROM analytics.mv_lead_lite l WHERE ${newLeadWhere(sql, f, periods.current)} AND l.phone_valid
                             AND NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id)`;
     // never-touched conversions (alias u: lead_id, created_date, first_pay); purchased class: the class payment's date instead of first_pay
@@ -232,7 +233,7 @@ overview.get('/overview', (c) =>
     const untouchedDims = (skip?: string) => sql<{ dim: string; key: string; leads: number; converted: number; converted_first: number; ics: number }[]>`
       WITH u AS (
         SELECT l.lead_id, l.created_date, l.lead_stage, l.class_raw, l.lm_reason, l.lead_source,
-               CASE WHEN l.phone_valid THEN (SELECT min(vp.payment_date) FROM analytics.v_valid_payment_x vp WHERE vp.phone_key = l.phone_key) END AS first_pay
+               CASE WHEN l.phone_valid THEN (SELECT pp.first_pay FROM analytics.mv_phone_pay pp WHERE pp.phone_key = l.phone_key) END AS first_pay
         FROM analytics.mv_lead_lite l WHERE ${newLeadWhere(sql, f, periods.current, { skip })}
           AND ${noTouch}),
       c AS (SELECT u.*, ${uConvAny} AS conv, ${uAfter} AS conv_first FROM u)
@@ -466,16 +467,9 @@ overview.get('/overview', (c) =>
           UNION ALL
           SELECT u.lead_id, ${uAfter}, ${uBefore} FROM (${untouched}) u WHERE ${uAfter} OR ${uBefore}),
         cm AS (SELECT c.after_touch, c.before_win, m.phone_key FROM c JOIN analytics.mv_lead_lite m ON m.lead_id = c.lead_id),
-        pk AS (SELECT DISTINCT phone_key FROM cm WHERE phone_key IS NOT NULL),
-        ay AS (
-          SELECT DISTINCT ON (up.phone_key) up.phone_key, NULLIF(btrim(b.academic_year), '') AS ay
-          FROM pk JOIN analytics.mv_user_phone up ON up.phone_key = pk.phone_key
-          JOIN app.home_payment p ON p.user_id = up.user_id
-          JOIN app.core_batch b ON b.id = COALESCE(p.enrollment_batch_id, p.batch_id)
-          WHERE p.payment_method = 0 AND p.deleted = false AND p.is_success = true AND p.payment_success = true AND p.payment_date IS NOT NULL
-            AND NULLIF(btrim(b.academic_year), '') IS NOT NULL
-          ORDER BY up.phone_key, p.payment_date DESC, p.payment_time DESC NULLS LAST, p.id DESC),
-        a AS (SELECT cm.after_touch, cm.before_win, COALESCE(ay.ay, '(no academic year)') AS ay FROM cm LEFT JOIN ay ON ay.phone_key = cm.phone_key)
+        -- the latest academic year of the number is precomputed per phone (analytics.mv_phone_pay.latest_ay, sql/054: the same DISTINCT ON
+        -- over home_payment -> core_batch, built once per refresh instead of once per Overview)
+        a AS (SELECT cm.after_touch, cm.before_win, COALESCE(pp.latest_ay, '(no academic year)') AS ay FROM cm LEFT JOIN analytics.mv_phone_pay pp ON pp.phone_key = cm.phone_key)
         SELECT 'after' AS kind, ay AS key, count(*)::int AS leads FROM a WHERE after_touch GROUP BY 2
         UNION ALL
         SELECT 'before', ay, count(*)::int FROM a WHERE before_win GROUP BY 2
