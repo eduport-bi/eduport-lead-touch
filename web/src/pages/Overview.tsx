@@ -40,7 +40,8 @@ type Measure = 'touches' | 'leads' | 'converted';
 const MEASURE_LABEL: Record<Measure, string> = { touches: 'Total lead touches', leads: 'Total leads', converted: 'Converted' };
 
 const ALL_COLS: Col<DimRow>[] = [
-  { key: 'key', header: '' }, { key: 'leads', header: 'Total leads' }, { key: 'touches', header: 'Total lead touches', bar: true },
+  // long values (campaign names) are cut with "…" and shown in full on hover, so a card's table never scrolls sideways (2026-11-26)
+  { key: 'key', header: '', render: (v) => <span className="block max-w-[16rem] truncate" title={String(v ?? '')}>{String(v ?? '')}</span> }, { key: 'leads', header: 'Total leads' }, { key: 'touches', header: 'Total lead touches', bar: true },
   { key: 'converted', header: 'Converted' }, { key: 'conv_rate', header: 'Conv %', render: (v) => fmtPct(v as number) },
   { key: 'converted_first', header: 'Converted (first payment)' },
 ];
@@ -91,7 +92,8 @@ export default function Overview() {
   useEffect(() => {
     const el = restRef.current;
     if (!el || typeof IntersectionObserver === 'undefined') { setRestNear(true); return; }
-    const io = new IntersectionObserver(([e]) => setRestNear(!!e?.isIntersecting), { rootMargin: '400px 0px' });
+    // near = the marker is within 400 px of the screen OR already above it (scrolled past, or jumped to the bottom); once near it stays on
+    const io = new IntersectionObserver(([e]) => { if (e && (e.isIntersecting || e.boundingClientRect.top < 0)) setRestNear(true); }, { rootMargin: '400px 0px' });
     io.observe(el);
     return () => io.disconnect();
   }, []);
@@ -236,23 +238,38 @@ export default function Overview() {
         {dimCard('Campaign name', rd?.campaign, 'campaign', ['leads', 'touches'], 'tone-brand', { asTable: true, height: 260, subtitle: 'Total leads by the campaign of their FIRST touch in the selection · each lead once', help: 'A split of Total leads: each lead once, under the campaign of its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch. Total lead touches = every touch of that campaign.' })}
         {dimCard('Staff-wise', rd?.staff, 'staff', ['leads', 'touches'], 'tone-pink', { asTable: true, height: 300, subtitle: 'Total leads by the staff of their FIRST touch in the selection · each lead once', help: 'A split of Total leads: each lead once, under the staff recorded on its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch. Total lead touches = every touch of that staff.' })}
         <ChartCard title="Leads still waiting in a stage" tone="tone-red" loading={restLoading} error={r.error} rows={staleRows} height={240}
-          subtitle={`still in the stage, created more than ${rk?.stale_days ?? staleDays} days ago and not touched in the last ${rk?.stale_days ?? staleDays} days · click a row for the leads`}
+          columns={[
+            { key: 'stage', header: 'Stage' }, { key: 'total', header: 'In the stage', align: 'right' },
+            { key: 'stale', header: 'Still there', align: 'right' }, { key: 'share', header: 'Share', align: 'right', render: (v) => fmtPct(v as number) },
+            { key: 'untouched', header: 'Never touched', align: 'right' },
+          ]}
+          subtitle={`still in the stage, created more than ${rk?.stale_days ?? staleDays} days ago and not touched in the last ${rk?.stale_days ?? staleDays} days · click a stage for the leads`}
           help={`${def.stale_new ?? ''} ${def.stale_nc ?? ''}`}
           actions={<div className="flex items-center gap-1 text-[11px] text-ink-2">
             <span>Days</span>
             {[3, 5, 7, 10, 15].map((n) => <button key={n} className={`rounded border px-1.5 py-0.5 ${staleDays === n ? 'border-accent bg-accent/10 font-semibold text-accent' : 'border-line hover:bg-surface-2'}`} onClick={() => changeStale(n)}>{n}</button>)}
             <input type="number" min={1} max={365} className="input !w-16 !py-0.5" title="any number of days" value={staleDays} onChange={(e) => changeStale(Number(e.target.value))} />
           </div>}>
-          <DataTable rows={staleRows} compact maxHeight="100%" rowKey={(r) => r.stage}
-            onRowClick={(r) => setDrill({ metric: r.metric, title: `Still ${r.stage} after ${rk?.stale_days ?? staleDays} days`, extra: { stale_days: rk?.stale_days ?? staleDays }, summary: true,
-              subtitle: `leads still in stage ${r.stage}, created more than ${rk?.stale_days ?? staleDays} days ago and not touched in the last ${rk?.stale_days ?? staleDays} days · sorted by last touch` })}
-            columns={[
-              { key: 'stage', header: 'Stage' },
-              { key: 'total', header: 'Leads in the stage', align: 'right' },
-              { key: 'stale', header: `Still there after ${rk?.stale_days ?? staleDays} days`, align: 'right', bar: true },
-              { key: 'share', header: 'Share', align: 'right', render: (v) => fmtPct(v as number) },
-              { key: 'untouched', header: 'Never touched after creation', align: 'right' },
-            ]} />
+          {/* one panel per stage (2026-11-26): fills the card next to Turnaround, no table scroll bar; the table view is on the card's table button */}
+          <div className="flex h-full flex-col justify-center gap-3">
+            {staleRows.map((s) => (
+              <button key={s.stage} type="button" className="rounded-xl border border-line px-4 py-3 text-left transition hover:border-accent/40"
+                title="click for the leads"
+                onClick={() => setDrill({ metric: s.metric, title: `Still ${s.stage} after ${rk?.stale_days ?? staleDays} days`, extra: { stale_days: rk?.stale_days ?? staleDays }, summary: true,
+                  subtitle: `leads still in stage ${s.stage}, created more than ${rk?.stale_days ?? staleDays} days ago and not touched in the last ${rk?.stale_days ?? staleDays} days · sorted by last touch` })}>
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-sm font-semibold text-ink">{s.stage}</span>
+                  <span className="text-xs text-ink-3">{fmtInt(s.total)} leads in the stage</span>
+                </div>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-2xl font-extrabold tracking-tight text-ink">{fmtInt(s.stale)}</span>
+                  <span className="text-xs text-ink-3">still there after {rk?.stale_days ?? staleDays} days · {fmtPct(s.share)}</span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-2"><div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, s.share ?? 0)}%` }} /></div>
+                <div className="mt-1.5 text-[11px] text-ink-3">{fmtInt(s.untouched)} never touched after creation</div>
+              </button>
+            ))}
+          </div>
         </ChartCard>
         {/* Turnaround sits next to the stale-stage card, so the card grid has no half-empty row (2026-11-26) */}
         <ChartCard title="Turnaround time" tone="tone-green" help={def.tat} loading={restLoading} error={r.error} rows={tatData?.buckets ?? []} height={240}

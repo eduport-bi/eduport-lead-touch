@@ -27,7 +27,7 @@ const axis = { tickLine: false, axisLine: false } as const;
 // ---------------------------------------------------------------- trend (two stacked panels, one axis each)
 export interface TrendDatum { d: string; leads: number; converted: number; conv_rate: number | null; touches: number; prev_leads?: number | null; prev_conv_rate?: number | null }
 export function TrendChart({ data, compare }: { data: TrendDatum[]; compare?: boolean }) {
-  const { series, ink } = useTheme();
+  const { series, ramp, ink } = useTheme();
   const tipRows = (d: Record<string, unknown>): [string, string][] => [
     ['Leads', fmtInt(d.leads as number)], ['Converted', fmtInt(d.converted as number)], ['Conversion', fmtPct(d.conv_rate as number)], ['Touches', fmtInt(d.touches as number)],
     ...(compare ? ([['Prev leads', fmtInt(d.prev_leads as number)], ['Prev conversion', fmtPct(d.prev_conv_rate as number)]] as [string, string][]) : []),
@@ -62,23 +62,25 @@ export function TrendChart({ data, compare }: { data: TrendDatum[]; compare?: bo
 
 // ---------------------------------------------------------------- horizontal bars (click = cross-filter)
 export interface BarDatum { key: string; value: number; secondary?: number | null; label?: string; selected?: boolean; extra?: Record<string, unknown> }
-export function HBars({ data, format = fmtInt, secondaryLabel, secondaryFormat = fmtPct, onClick, color, maxLabel = 22, valueLabel = 'Value', colorful }: {
+export function HBars({ data, format = fmtInt, secondaryLabel, secondaryFormat = fmtPct, onClick, color, maxLabel = 22, valueLabel = 'Value', colorful = true }: {
   data: BarDatum[]; format?: (v: number) => string; secondaryLabel?: string; secondaryFormat?: (v: number) => string; onClick?: (key: string) => void; color?: string; maxLabel?: number; valueLabel?: string; colorful?: boolean;
 }) {
-  const { series, ink } = useTheme();
+  const { series, ramp, ink } = useTheme();
   const c = color ?? series[0];
+  const shades = ramp(data.length);   // the bars step along the orange -> indigo gradient
   const anySel = data.some((d) => d.selected);
+  // fills its card (2026-11-26): the bars spread over the whole height; a long list keeps 22 px per bar and scrolls
   const h = Math.max(110, data.length * 22);
   return (
     <div className="h-full overflow-y-auto">
-      <ResponsiveContainer width="100%" height={h}>
+      <ResponsiveContainer width="100%" height="100%" minHeight={h}>
         <BarChart data={data} layout="vertical" margin={{ top: 2, right: 56, left: 8, bottom: 2 }} barCategoryGap={3}>
           <CartesianGrid horizontal={false} stroke={ink.grid} />
           <XAxis type="number" {...axis} tickFormatter={fmtCompact} hide />
           <YAxis type="category" dataKey="key" {...axis} width={128} interval={0} tick={{ fontSize: 10 }} tickFormatter={(v: string) => (v.length > maxLabel ? `${v.slice(0, maxLabel - 1)}…` : v)} />
           <Tooltip cursor={{ fill: ink.grid, opacity: 0.4 }} content={<Tip rows={(d) => [[valueLabel, format(d.value as number)], ...(secondaryLabel && d.secondary != null ? ([[secondaryLabel, secondaryFormat(d.secondary as number)]] as [string, string][]) : []), ...Object.entries((d.extra as Record<string, unknown>) ?? {}).map(([k, v]) => [k, String(v)] as [string, string])]} />} />
-          <Bar dataKey="value" radius={[6, 6, 6, 6]} maxBarSize={13} isAnimationActive={false} onClick={(d) => onClick?.((d as unknown as BarDatum).key)} cursor={onClick ? 'pointer' : undefined}>
-            {data.map((d, i) => <Cell key={d.key} fill={colorful ? series[i % series.length] : c} fillOpacity={anySel && !d.selected ? 0.35 : 1} />)}
+          <Bar dataKey="value" radius={[6, 6, 6, 6]} maxBarSize={18} isAnimationActive={false} onClick={(d) => onClick?.((d as unknown as BarDatum).key)} cursor={onClick ? 'pointer' : undefined}>
+            {data.map((d, i) => <Cell key={d.key} fill={colorful ? shades[i] : c} fillOpacity={anySel && !d.selected ? 0.35 : 1} />)}
             <LabelList dataKey="value" position="right" formatter={(v: number) => format(v)} style={{ fontSize: 10, fill: ink.secondary }} />
           </Bar>
         </BarChart>
@@ -89,7 +91,7 @@ export function HBars({ data, format = fmtInt, secondaryLabel, secondaryFormat =
 
 // ---------------------------------------------------------------- vertical bars + optional line on a second panel
 export function VBars({ data, xKey, bars, format = fmtInt, onClick, stacked, minBarWidth = 34 }: { data: Record<string, unknown>[]; xKey: string; bars: { key: string; label: string }[]; format?: (v: number) => string; onClick?: (key: string) => void; stacked?: boolean; minBarWidth?: number }) {
-  const { series, ink } = useTheme();
+  const { series, ramp, ink } = useTheme();
   // each category gets at least `minBarWidth` px; when that exceeds the card the chart scrolls sideways instead of squeezing the labels
   return (
     <div className="h-full w-full overflow-x-auto overflow-y-hidden">
@@ -101,7 +103,12 @@ export function VBars({ data, xKey, bars, format = fmtInt, onClick, stacked, min
         <YAxis {...axis} tickFormatter={fmtCompact} width={48} />
         <Tooltip cursor={{ fill: ink.grid, opacity: 0.4 }} content={<Tip rows={(d) => bars.map((b) => [b.label, format(d[b.key] as number)])} />} />
         {bars.length > 1 && <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />}
-        {bars.map((b, i) => <Bar key={b.key} dataKey={b.key} name={b.label} fill={series[i]} stackId={stacked ? 's' : undefined} radius={stacked && i < bars.length - 1 ? 0 : [6, 6, 0, 0]} maxBarSize={40} isAnimationActive={false} onClick={(d) => onClick?.(String((d as Record<string, unknown>)[xKey]))} cursor={onClick ? 'pointer' : undefined} />)}
+        {bars.map((b, i) => (
+          <Bar key={b.key} dataKey={b.key} name={b.label} fill={ramp(bars.length)[i]} stackId={stacked ? 's' : undefined} radius={stacked && i < bars.length - 1 ? 0 : [6, 6, 0, 0]} maxBarSize={40} isAnimationActive={false} onClick={(d) => onClick?.(String((d as Record<string, unknown>)[xKey]))} cursor={onClick ? 'pointer' : undefined}>
+            {/* one series: the categories step along the gradient; several series: one shade per series */}
+            {bars.length === 1 && ramp(data.length).map((sh, ci) => <Cell key={ci} fill={sh} />)}
+          </Bar>
+        ))}
       </BarChart>
     </ResponsiveContainer>
     </div>
@@ -111,16 +118,17 @@ export function VBars({ data, xKey, bars, format = fmtInt, onClick, stacked, min
 
 // ---------------------------------------------------------------- daily lines: one label every 2nd day, no scrolling, click a point to pick that day
 export function DailyLines({ data, xKey, lines, format = fmtInt, onClick }: { data: Record<string, unknown>[]; xKey: string; lines: { key: string; label: string }[]; format?: (v: number) => string; onClick?: (x: string) => void }) {
-  const { series, ink } = useTheme();
+  const { series, ramp, ink } = useTheme();
   return (
     <ResponsiveContainer width="100%" height="100%">
       <LineChart data={data} margin={{ top: 8, right: 12, left: -14, bottom: 0 }} onClick={(e) => { const l = (e as { activeLabel?: unknown } | null)?.activeLabel; if (l != null) onClick?.(String(l)); }} style={{ cursor: onClick ? 'pointer' : undefined }}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
-        <XAxis dataKey={xKey} {...axis} interval={1} tick={{ fontSize: 10 }} angle={-35} textAnchor="end" height={34} />
+        {/* at most ~20 date labels, evenly spaced and upright, so they never pile up (2026-11-26); every day is still a point */}
+        <XAxis dataKey={xKey} {...axis} interval={Math.max(0, Math.ceil(data.length / 20) - 1)} tick={{ fontSize: 11 }} height={24} />
         <YAxis {...axis} tickFormatter={fmtCompact} width={44} />
         <Tooltip content={<Tip rows={(d) => lines.map((l) => [l.label, format(d[l.key] as number)])} />} />
         {lines.length > 1 && <Legend iconType="plainline" wrapperStyle={{ fontSize: 11 }} />}
-        {lines.map((l, i) => <Line key={l.key} dataKey={l.key} name={l.label} stroke={series[i]} strokeWidth={2} dot={{ r: 2.5, strokeWidth: 0, fill: series[i] }} activeDot={{ r: 4 }} isAnimationActive={false} />)}
+        {lines.map((l, i) => <Line key={l.key} dataKey={l.key} name={l.label} stroke={ramp(lines.length)[i]} strokeWidth={2} dot={{ r: 2.5, strokeWidth: 0, fill: ramp(lines.length)[i] }} activeDot={{ r: 4 }} isAnimationActive={false} />)}
       </LineChart>
     </ResponsiveContainer>
   );
@@ -128,7 +136,7 @@ export function DailyLines({ data, xKey, lines, format = fmtInt, onClick }: { da
 
 // ---------------------------------------------------------------- multi-series line (touch curve etc.)
 export function Lines({ data, xKey, lines, format = fmtPct, yLabel }: { data: Record<string, unknown>[]; xKey: string; lines: { key: string; label: string }[]; format?: (v: number) => string; yLabel?: string }) {
-  const { series, ink } = useTheme();
+  const { series, ramp, ink } = useTheme();
   return (
     <ResponsiveContainer width="100%" height="100%">
       <LineChart data={data} margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
@@ -137,7 +145,7 @@ export function Lines({ data, xKey, lines, format = fmtPct, yLabel }: { data: Re
         <YAxis {...axis} tickFormatter={(v) => format(v)} width={52} label={yLabel ? { value: yLabel, angle: -90, position: 'insideLeft', fontSize: 10, fill: ink.muted } : undefined} />
         <Tooltip content={<Tip rows={(d) => lines.map((l) => [l.label, d[l.key] == null ? '–' : format(d[l.key] as number)])} />} />
         {lines.length > 1 && <Legend iconType="plainline" wrapperStyle={{ fontSize: 11 }} />}
-        {lines.slice(0, 8).map((l, i) => <Line key={l.key} dataKey={l.key} name={l.label} stroke={series[i]} strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} connectNulls />)}
+        {lines.slice(0, 8).map((l, i) => <Line key={l.key} dataKey={l.key} name={l.label} stroke={ramp(Math.min(8, lines.length))[i]} strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} connectNulls />)}
       </LineChart>
     </ResponsiveContainer>
   );
@@ -200,7 +208,7 @@ export const DOW_LABELS = DOW;
 // ---------------------------------------------------------------- scatter with quadrants
 export interface ScatterDatum { key: string; x: number; y: number; z?: number; quadrant?: string }
 export function QuadrantScatter({ data, xLabel, yLabel, xMid, yMid, onClick, xFormat = fmtInt, yFormat = fmtPct }: { data: ScatterDatum[]; xLabel: string; yLabel: string; xMid: number; yMid: number; onClick?: (k: string) => void; xFormat?: (v: number) => string; yFormat?: (v: number) => string }) {
-  const { series, ink } = useTheme();
+  const { series, ramp, ink } = useTheme();
   const colorFor = (q?: string) => (q === 'Scale winners' ? series[2] : q === 'Fix or kill' ? series[7] : q === 'Nurture' ? series[0] : series[3]);
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -225,7 +233,8 @@ export function QuadrantScatter({ data, xLabel, yLabel, xMid, yMid, onClick, xFo
 export function Donut({ data, valueLabel = 'Value', secondaryLabel, format = fmtInt, secondaryFormat = fmtInt, onClick, centerLabel }: {
   data: BarDatum[]; valueLabel?: string; secondaryLabel?: string; format?: (v: number) => string; secondaryFormat?: (v: number) => string; onClick?: (key: string) => void; centerLabel?: string;
 }) {
-  const { series, ink } = useTheme();
+  const { ramp, ink } = useTheme();
+  const series = ramp(data.length);   // slices step along the gradient
   const total = data.reduce((s, d) => s + d.value, 0);
   const anySel = data.some((d) => d.selected);
   return (

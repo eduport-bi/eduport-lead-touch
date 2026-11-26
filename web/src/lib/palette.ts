@@ -5,8 +5,21 @@
  */
 import { useSyncExternalStore } from 'react';
 
-export const SERIES_LIGHT = ['#f04e23', '#2563eb', '#0d9488', '#d97706', '#7c3aed', '#db2777', '#059669', '#64748b'];
-export const SERIES_DARK  = ['#ff7a50', '#60a5fa', '#2dd4bf', '#fbbf24', '#a78bfa', '#f472b6', '#34d399', '#94a3b8'];
+// Charts use ONE two-colour ramp (Eduport orange -> deep indigo) instead of many bright hues (2026-11-13): series i of n sits at i/(n-1)
+// on the ramp, so a 2-line chart is orange + indigo and a 10-row bar chart steps evenly between them.
+export const RAMP_LIGHT: [string, string] = ['#f04e23', '#312e81'];
+export const RAMP_DARK: [string, string] = ['#ff7a50', '#a5b4fc'];
+const hex = (h: string) => [1, 3, 5].map((i) => Number.parseInt(h.slice(i, i + 2), 16));
+/** n colours evenly spaced on the two-colour ramp */
+export function ramp(n: number, dark = false): string[] {
+  const [a, b] = (dark ? RAMP_DARK : RAMP_LIGHT).map(hex);
+  return Array.from({ length: Math.max(1, n) }, (_, i) => {
+    const t = n <= 1 ? 0 : i / (n - 1);
+    return `#${a.map((v, k) => Math.round(v + (b[k] - v) * t).toString(16).padStart(2, '0')).join('')}`;
+  });
+}
+export const SERIES_LIGHT = ramp(8);
+export const SERIES_DARK = ramp(8, true);
 export const SEQ = ['#fde8e1', '#fbd6c9', '#f9c2ae', '#f7ae93', '#f59a78', '#f3865e', '#f27246', '#f04e23', '#d9461f', '#c23e1b', '#ab3617', '#942f14', '#7d2710'];
 export const DIVERGING = { neg: '#2563eb', mid_light: '#f1f2f5', mid_dark: '#3a3d4c', pos: '#f04e23' };
 export const STATUS = { good: '#0ca30c', warning: '#fab219', serious: '#ec835a', critical: '#d03b3b' };
@@ -29,14 +42,20 @@ export function useTheme() {
     try { localStorage.setItem('lt-theme', next ? 'dark' : 'light'); } catch { /* ignore */ }
     listeners.forEach((l) => l());
   };
-  return { dark, toggle, series: dark ? SERIES_DARK : SERIES_LIGHT, ink: dark ? INK.dark : INK.light, midpoint: dark ? DIVERGING.mid_dark : DIVERGING.mid_light };
+  return { dark, toggle, series: dark ? SERIES_DARK : SERIES_LIGHT, ramp: (n: number) => ramp(n, dark), ink: dark ? INK.dark : INK.light, midpoint: dark ? DIVERGING.mid_dark : DIVERGING.mid_light };
 }
 
-/** sequential color for 0..1 */
+/** sequential color for 0..1 on the same orange -> indigo gradient as the charts (light tint -> orange -> indigo) */
 export function seqColor(t: number, dark = false): string {
   if (Number.isNaN(t)) return dark ? '#2c2c2a' : '#f0efec';
-  const i = Math.max(0, Math.min(SEQ.length - 1, Math.round(t * (SEQ.length - 1))));
-  return SEQ[i];
+  void SEQ;
+  const steps = 13;
+  const i = Math.max(0, Math.min(steps - 1, Math.round(t * (steps - 1))));
+  const tint = ramp(2, dark)[0];
+  const light = dark ? '#3a2a24' : '#fde8e1';
+  const half = Math.floor(steps / 2);
+  if (i <= half) { const [a, b] = [light, tint].map(hex); const u = i / half; return `#${a.map((v, k) => Math.round(v + (b[k] - v) * u).toString(16).padStart(2, '0')).join('')}`; }
+  return ramp(steps - half, dark)[i - half];
 }
 /** text color that is legible on a sequential step */
-export const seqInk = (t: number) => (t > 0.55 ? '#ffffff' : '#0b0b0b');
+export const seqInk = (t: number) => (t > 0.4 ? '#ffffff' : '#0b0b0b');
