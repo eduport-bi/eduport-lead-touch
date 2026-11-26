@@ -83,7 +83,7 @@ export default function TouchAttribution({ mode }: { mode: 'first' | 'last' }) {
       <div className="grid gap-4 xl:grid-cols-2">
         {card('Touch point analysis', d?.touch_point, 'touch_point', 'tone-teal')}
         {card('Class wise distribution', d?.class_raw, 'class_raw', 'tone-violet')}
-        {card('Lead source distribution', d?.source, 'source', 'tone-orange', { asTable: true })}
+        {card('Touch source distribution', d?.source, 'source', 'tone-orange', { asTable: true })}
         {card('Medium', d?.medium, 'medium', 'tone-green', { asTable: true })}
         {card('Campaign name', d?.campaign, 'campaign', 'tone-brand', { asTable: true })}
         <ChartCard title={`${label} per day`} tone="tone-pink" subtitle={`distinct leads and ${label.toLowerCase()} by touch date`} loading={q.isLoading} error={q.error} rows={d?.daily ?? []} height={280}>

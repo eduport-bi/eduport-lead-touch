@@ -31,7 +31,7 @@ interface OverviewResponse {
   tat: Record<'created' | 'touch' | 'activity', { leads: number; avg_days: number | null; median_days: number | null; buckets: { key: string; leads: number }[] }>;
   ic_status: { key: string; leads: number; ics: number }[];
   ic_course: DimRow[];
-  touch_point: DimRow[]; source: DimRow[]; class_raw: DimRow[]; reason: DimRow[]; lm_reason: DimRow[]; medium: DimRow[]; campaign: DimRow[]; staff: DimRow[];
+  touch_point: DimRow[]; lead_source: DimRow[]; last_touch: DimRow[]; class_raw: DimRow[]; reason: DimRow[]; lm_reason: DimRow[]; medium: DimRow[]; campaign: DimRow[]; staff: DimRow[];
   daily: { d: string; touches: number; leads: number; converted: number }[];
   definitions: Record<string, string>;
 }
@@ -57,7 +57,8 @@ function DimCard({ title, rows, dim, measures, tone, opts, loading, error, onRet
 }) {
   const [search, setSearch] = useState('');
   const s = search.trim().toLowerCase();
-  const all = rows ?? [];
+  // a card whose dim is filtered shows only the picked values (2026-11-26)
+  const all = (rows ?? []).filter((r) => !selected.length || selected.includes(r.key));
   const filtered = s ? all.filter((r) => r.key.toLowerCase().includes(s)) : all;
   const data = filtered.slice(0, opts.limit ?? 12);
   const [m1, m2] = measures;
@@ -225,7 +226,8 @@ export default function Overview() {
       {r.error && <Note>⚠ {r.error.message}</Note>}
       <div className="grid gap-4 xl:grid-cols-2">
         {dimCard('Touch point analysis', rd?.touch_point, 'touch_point', ['touches', 'converted'], 'tone-teal', { colorful: true, height: 270 })}
-        {dimCard('Lead source distribution', rd?.source, 'source', ['leads', 'converted'], 'tone-orange', { asTable: true, height: 270, subtitle: 'Total leads by the source of their FIRST touch in the selection · each lead once · click rows to filter the other cards', help: 'A split of Total leads: each lead is counted once, under the source recorded on its FIRST touch in the selection; "(no touch)" = leads of the selection without a touch, so the Total leads column adds up to the page total. Total lead touches = every touch carrying that source, including later touches of leads first touched elsewhere. Converted = the dashboard rule for the lead.' })}
+        {dimCard('Lead source distribution', rd?.lead_source, 'lead_source', ['leads', 'converted'], 'tone-orange', { asTable: true, height: 270, subtitle: 'Total leads by the Lead Source on the lead record · each lead once · click rows to filter the other cards', help: def.lead_source })}
+        {dimCard('Last touch distribution', rd?.last_touch, 'touch_point', ['leads', 'converted'], 'tone-brand', { asTable: true, height: 270, subtitle: 'Total leads by the touch point of their LAST touch · an app touch less than 2 hours before the payment is passed over · click rows to filter by touch point', help: def.last_touch })}
         {dimCard('Class (Lead Master)', rd?.class_raw, 'class_raw', ['touches', 'converted'], 'tone-violet', { limit: 14, height: 300, colorful: true, help: 'The Class field on the Salesforce lead record (Lead Master), not the interested course and not the purchased course: lead touches in the window of converted leads, grouped by that class. Purchased course and grade are on the Converted page; interested courses have their own card and filter.' })}
         {dimCard('LM Reason', rd?.lm_reason, 'lm_reason', ['leads'], 'tone-amber', { limit: 14, height: 300, help: def.lm_reason, subtitle: 'Total leads by the LM Reason field on the lead · click a row to filter every card' })}
         {dimCard('Interested course', rd?.ic_course, 'ic_course', ['leads', 'converted'], 'tone-pink', { asTable: true, height: 300, help: def.ic_course, subtitle: 'Total leads by the course on their Interested Course records (interest, not purchase) · a lead with several courses appears under each · click rows to filter every page (multi-select)' })}
@@ -252,12 +254,7 @@ export default function Overview() {
               { key: 'untouched', header: 'Never touched after creation', align: 'right' },
             ]} />
         </ChartCard>
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-2">
-        <ChartCard title="Touches per day" tone="tone-teal" subtitle="touches, distinct leads and converted leads by touch date · click a point to zoom the date range to that day" loading={restLoading} error={r.error} rows={rd?.daily ?? []} height={260}>
-          <DailyLines data={(rd?.daily ?? []).map((r) => ({ d: r.d.slice(5), touches: r.touches, leads: r.leads, converted: r.converted }))} xKey="d" lines={[{ key: 'touches', label: 'Touches' }, { key: 'leads', label: 'Leads' }, { key: 'converted', label: 'Converted' }]} onClick={(key) => { const row = (rd?.daily ?? []).find((r) => r.d.slice(5) === key); if (row) set({ preset: 'custom', from: row.d, to: row.d }); }} />
-        </ChartCard>
+        {/* Turnaround sits next to the stale-stage card, so the card grid has no half-empty row (2026-11-26) */}
         <ChartCard title="Turnaround time" tone="tone-green" help={def.tat} loading={restLoading} error={r.error} rows={tatData?.buckets ?? []} height={240}
           subtitle={tatData ? `${fmtInt(tatData.leads)} ${tatIsCall ? 'leads' : 'converted leads'} · median ${tatData.median_days == null ? '–' : fmt1(tatData.median_days)} d · average ${tatData.avg_days == null ? '–' : fmt1(tatData.avg_days)} d${tatIsCall ? ' (leads with an activity)' : ''} · click a band for the leads` : tatIsCall ? 'days from the first touch in the range to the first activity on or after it' : 'days to the first payment, converted leads only'}
           actions={<Segmented size="xs" value={tat} onChange={setTat} options={[
@@ -272,8 +269,15 @@ export default function Overview() {
         </ChartCard>
       </div>
 
+      {/* Touches per day takes the whole row (2026-11-26) */}
+      <div>
+        <ChartCard title="Touches per day" tone="tone-teal" subtitle="touches, distinct leads and converted leads by touch date · click a point to zoom the date range to that day" loading={restLoading} error={r.error} rows={rd?.daily ?? []} height={260}>
+          <DailyLines data={(rd?.daily ?? []).map((r) => ({ d: r.d.slice(5), touches: r.touches, leads: r.leads, converted: r.converted }))} xKey="d" lines={[{ key: 'touches', label: 'Touches' }, { key: 'leads', label: 'Leads' }, { key: 'converted', label: 'Converted' }]} onClick={(key) => { const row = (rd?.daily ?? []).find((r) => r.d.slice(5) === key); if (row) set({ preset: 'custom', from: row.d, to: row.d }); }} />
+        </ChartCard>
+      </div>
+
       {drill && <DrillDrawer drill={drill} onClose={() => setDrill(null)} />}
-      <Note>The main date range applies to the <b>lead created</b> date or the <b>touch date</b>, whichever is selected in the filter bar. Switch on <b>Payment date</b> to add a second window: Converted then counts only valid payments dated inside it. Filters on top apply to every card. Click a KPI tile to list the leads behind it (with CSV download). Clicking a bar, slice or table row filters every other card by that value; click more rows to add them (a card never filters itself, so its rows stay visible and highlighted); remove the chip on top or click the row again to undo. Every card also has a chart/table toggle. Hover the help icon on a card or KPI for the exact definition.</Note>
+      <Note>The main date range applies to the <b>lead created</b> date or the <b>touch date</b>, whichever is selected in the filter bar. Switch on <b>Payment date</b> to add a second window: Converted then counts only valid payments dated inside it. Filters on top apply to every card. Click a KPI tile to list the leads behind it (with CSV download). Clicking a bar, slice or table row filters every card by that value; a filtered card then shows only the picked values. Add more values from the filter bar; remove the chip on top or clear the box to undo. Every card also has a chart/table toggle. Hover the help icon on a card or KPI for the exact definition.</Note>
     </div>
   );
 }

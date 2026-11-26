@@ -185,10 +185,10 @@ export default function Converted() {
         {card('Touch point analysis (first touch)', d?.by_first_touch_point, 'first_touch_point', 'tone-teal', { height: 260, help: def.first_credit })}
         {card('Class wise conversion (purchased course)', d?.by_course, 'course', 'tone-violet', { asTable: true, cols: payCols, help: def.course, pick: { selected: courses, toggle: toggleIn(courses, setCourses), set: setCourses } })}
         {card('Purchased grade', d?.by_grade, 'grade', 'tone-amber', { cols: payCols, help: def.grade, height: 280, filterDim: 'purchased_grade' })}
-        {card('Lead source distribution (last touch)', d?.by_last_source, 'last_touch_source', 'tone-orange', { filterDim: 'source', asTable: true,
-          help: `Lead source distribution (last touch). ${def.credit ?? ''} The "+" on the App Installed row splits those users by the source of the touch BEFORE the install. ${def.app_prev ?? ''}`,
+        {card('Touch source distribution (last touch)', d?.by_last_source, 'last_touch_source', 'tone-orange', { filterDim: 'source', asTable: true,
+          help: `Touch source distribution (last touch). ${def.credit ?? ''} The "+" on the App Installed row splits those users by the source of the touch BEFORE the install. ${def.app_prev ?? ''}`,
           expand: { key: 'App Installed', rows: d?.by_app_prev_source ?? [], onPick: (key) => open(`App Installed (last touch) · touch before it: ${key}`, 'app_prev_source', key, 'paying users credited to an App Installed last touch whose touch before the install has this source · click a row for the lead record') } })}
-        {card('Lead source distribution (first touch)', d?.by_first_source, 'first_touch_source', 'tone-orange', { asTable: true, help: def.first_credit })}
+        {card('Touch source distribution (first touch)', d?.by_first_source, 'first_touch_source', 'tone-orange', { asTable: true, help: def.first_credit })}
         {card('Staff-wise (last touch)', d?.by_last_staff, 'last_touch_staff', 'tone-pink', { filterDim: 'staff', asTable: true })}
         {card('Staff-wise (first touch)', d?.by_first_staff, 'first_touch_staff', 'tone-pink', { asTable: true, help: def.first_credit })}
         {card('Medium wise conversion (last touch)', d?.by_last_medium, 'last_touch_medium', 'tone-green', { filterDim: 'medium', asTable: true })}

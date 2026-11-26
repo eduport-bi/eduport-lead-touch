@@ -159,7 +159,7 @@ async function byDim(sql: Sql, w: Frag, col: string, conv: Frag, convFirst: Frag
 }
 
 /** Dimension columns of the Overview cards (one GROUPING SETS statement when they share the main WHERE) */
-const CARD_DIMS = ['touch_point', 'class_raw', 'lm_reason'] as const;
+const CARD_DIMS = ['touch_point', 'class_raw', 'lm_reason', 'lead_source'] as const;
 type CardDim = (typeof CARD_DIMS)[number];
 const joinFrags = (sql: Sql, parts: Frag[], sep: Frag) => parts.reduce((a, x) => sql`${a}${sep}${x}`);
 
@@ -228,17 +228,17 @@ overview.get('/overview', (c) =>
     // answers every card; a card whose own dim is filtered gets its own statement without that filter (like the touch cards). The touch-level
     // cards (touch point, source, medium, campaign, staff) cannot include them: there is no touch to classify. "Converted" for these leads =
     // first valid payment on/after the creation day (any date); converted_first adds the window-start rule like the tile.
-    const U_DIMS = ['lead_stage', 'ic_status', 'class_raw', 'lm_reason', 'call_reason', 'ic_course'] as const;
+    const U_DIMS = ['lead_stage', 'ic_status', 'class_raw', 'lm_reason', 'lead_source', 'call_reason', 'ic_course'] as const;
     const untouchedDims = (skip?: string) => sql<{ dim: string; key: string; leads: number; converted: number; converted_first: number; ics: number }[]>`
       WITH u AS (
-        SELECT l.lead_id, l.created_date, l.lead_stage, l.class_raw, l.lm_reason,
+        SELECT l.lead_id, l.created_date, l.lead_stage, l.class_raw, l.lm_reason, l.lead_source,
                CASE WHEN l.phone_valid THEN (SELECT min(vp.payment_date) FROM analytics.v_valid_payment_x vp WHERE vp.phone_key = l.phone_key) END AS first_pay
         FROM analytics.mv_lead_lite l WHERE ${newLeadWhere(sql, f, periods.current, { skip })}
           AND ${noTouch}),
       c AS (SELECT u.*, ${uConvAny} AS conv, ${uAfter} AS conv_first FROM u)
       SELECT d.dim, COALESCE(d.key, '(null)') AS key, count(DISTINCT c.lead_id)::int AS leads,
              count(DISTINCT c.lead_id) FILTER (WHERE c.conv)::int AS converted, count(DISTINCT c.lead_id) FILTER (WHERE c.conv_first)::int AS converted_first, 0::int AS ics
-      FROM c CROSS JOIN LATERAL (VALUES ('lead_stage', c.lead_stage), ('class_raw', c.class_raw), ('lm_reason', c.lm_reason)) AS d(dim, key)
+      FROM c CROSS JOIN LATERAL (VALUES ('lead_stage', c.lead_stage), ('class_raw', c.class_raw), ('lm_reason', c.lm_reason), ('lead_source', c.lead_source)) AS d(dim, key)
       GROUP BY 1, 2
       UNION ALL
       SELECT 'call_reason', CASE WHEN lc.lead_id IS NULL THEN '(no call)' WHEN lc.last_reason IS NULL THEN '(no reason recorded)' ELSE lc.last_reason END,
@@ -270,7 +270,7 @@ overview.get('/overview', (c) =>
     // separately, the lower part only when it is scrolled near, so the first screen does not queue behind 12 statements nobody looks at yet.
     // No part = everything (older pages, exports). The never-touched lead rows (untouched_dims) feed both halves, so both run them.
     const part = q.part === 'top' || q.part === 'rest' ? q.part : null;
-    const REST = new Set(['stale', 'touch_point', 'source', 'class_raw', 'call_reason', 'medium', 'campaign', 'staff', 'daily', 'lm_reason', 'tat', 'ic_course']);
+    const REST = new Set(['stale', 'touch_point', 'lead_source', 'class_raw', 'call_reason', 'medium', 'campaign', 'staff', 'daily', 'lm_reason', 'tat', 'last_touch', 'ic_course']);
     const want = (n: string) => !part || n === 'untouched_dims' || (part === 'rest') === REST.has(n);
     const none = (): Promise<never[]> => Promise.resolve([]);
     // cards: one grouping-sets scan for every dim without its own filter; a filtered dim keeps its separate statement (its WHERE skips that filter)
@@ -283,7 +283,7 @@ overview.get('/overview', (c) =>
     // FIRST touch in the selection (earliest touch); "touches" stays the number of touches carrying that value (a lead's later touches count
     // there, not in leads). The never-touched leads of the selection are folded in afterwards as a "(no touch)" row, so the leads column adds
     // up to Total leads. Same self-skip rule as the other cards: a filtered dim gets its own statement without that filter.
-    const FT_DIMS = ['source', 'medium', 'campaign', 'staff'] as const;
+    const FT_DIMS = ['medium', 'campaign', 'staff'] as const;   // (the touch Source card became the lead's Lead Source, 2026-11-26)
     type FtDim = (typeof FT_DIMS)[number];
     const firstTouchDims = (ww: Frag, dims: readonly FtDim[]): Promise<(DimRow & { dim: string })[]> => {
       if (!dims.length) return Promise.resolve([]);
@@ -304,8 +304,8 @@ overview.get('/overview', (c) =>
     const ftShared = () => (ftMemo ??= firstTouchDims(w, FT_DIMS.filter((d) => !f[d]?.length)));
     const ftCard = (d: FtDim): Promise<DimRow[]> => (f[d]?.length ? firstTouchDims(wx(d), [d]) : ftShared())
       .then((rows) => rows.filter((r) => r.dim === d).map(({ dim: _dim, ...r }) => ({ ...r, conv_rate: pct(r.converted, r.leads) })).sort((a, b) => b.leads - a.leads));
-    const QN = ['kpis', 'stale', 'avg_window', 'avg_alltime', 'stages', 'ic_status', 'touch_point', 'source', 'class_raw', 'call_reason', 'medium', 'campaign', 'staff', 'daily', 'stage_react', 'lm_reason', 'new_leads', 'revised_new', 'tat', 'leads_union', 'fees', 'ic_course', 'conv_ay', 'conv_untouched', 'untouched_dims'];
-    const [[k], [stale], [avgWin], [avgAll], stages, icStatus, touchPoint, source, classRaw, reason, medium, campaign, staff, daily, reactRows, lmReason, [newLeads], revisedNew, tatRows, [leadsUnion], [fees], icCourse, convAy, [convU], uRows] = await timedAll(QN, [
+    const QN = ['kpis', 'stale', 'avg_window', 'avg_alltime', 'stages', 'ic_status', 'touch_point', 'lead_source', 'class_raw', 'call_reason', 'medium', 'campaign', 'staff', 'daily', 'stage_react', 'lm_reason', 'new_leads', 'revised_new', 'tat', 'leads_union', 'fees', 'ic_course', 'conv_ay', 'conv_untouched', 'untouched_dims', 'last_touch'];
+    const [[k], [stale], [avgWin], [avgAll], stages, icStatus, touchPoint, leadSource, classRaw, reason, medium, campaign, staff, daily, reactRows, lmReason, [newLeads], revisedNew, tatRows, [leadsUnion], [fees], icCourse, convAy, [convU], uRows, lastTouch] = await timedAll(QN, [
       want('kpis') ? sql<{ touches: number; leads: number; converted: number; converted_first: number; converted_before: number; sf_converted: number; stage_conv_total: number; stage_conv_unpaid: number; paid_other_stage: number; touches_of_converted: number }[]>`
         SELECT count(*)::int AS touches,
                count(DISTINCT t.lead_id)::int AS leads,
@@ -349,7 +349,7 @@ overview.get('/overview', (c) =>
         JOIN salesforce.interested_course__c ic ON ic.lead_master__c = k.lead_id AND ic.isdeleted = false
         WHERE NULLIF(btrim(ic.status__c),'') IS NOT NULL
         GROUP BY 1 ORDER BY leads DESC` : none(),
-      want('touch_point') ? card('touch_point') : none(), want('source') ? ftCard('source') : none(), want('class_raw') ? card('class_raw') : none(), want('call_reason') ? sql<DimRow[]>`
+      want('touch_point') ? card('touch_point') : none(), want('lead_source') ? card('lead_source') : none(), want('class_raw') ? card('class_raw') : none(), want('call_reason') ? sql<DimRow[]>`
         SELECT CASE WHEN c.lead_id IS NULL THEN '(no call)' WHEN c.last_reason IS NULL THEN '(no reason recorded)' ELSE c.last_reason END AS key, count(*)::int AS touches, count(DISTINCT t.lead_id)::int AS leads,
                count(DISTINCT t.lead_id) FILTER (WHERE ${conv})::int AS converted, count(DISTINCT t.lead_id) FILTER (WHERE ${convFirst})::int AS converted_first
         FROM analytics.mv_touch_flat t LEFT JOIN salesforce.lead_calls c ON c.lead_id = t.lead_id
@@ -483,6 +483,15 @@ overview.get('/overview', (c) =>
       // the never-touched leads of the selection that count as converted (after) / already customers (before), see `untouched` above
       want('conv_untouched') ? sql<{ after: number; before: number }[]>`SELECT count(*) FILTER (WHERE ${uAfter})::int AS after, count(*) FILTER (WHERE ${uBefore})::int AS before FROM (${untouched}) u` : none(),
       want('untouched_dims') ? untouchedCards : none(),
+      want('last_touch') ? sql<DimRow[]>`
+        WITH s AS (
+          SELECT t.lead_id, t.touch_point, COALESCE(t.tab_is_last_touch, false) AS is_last, t.touch_at, t.touch_id, (${conv}) AS c, (${convFirst}) AS cf
+          FROM analytics.mv_touch_flat t WHERE ${wx('touch_point')}),
+        pick AS (SELECT DISTINCT ON (s.lead_id) s.lead_id, s.touch_point FROM s ORDER BY s.lead_id, s.is_last DESC, s.touch_at DESC, s.touch_id DESC),
+        a AS (SELECT s.lead_id, bool_or(s.c) AS c, bool_or(s.cf) AS cf FROM s GROUP BY s.lead_id)
+        SELECT COALESCE(p.touch_point, '(null)') AS key, count(*)::int AS touches, count(*)::int AS leads,
+               count(*) FILTER (WHERE a.c)::int AS converted, count(*) FILTER (WHERE a.cf)::int AS converted_first
+        FROM pick p JOIN a ON a.lead_id = p.lead_id GROUP BY 1` : none(),
     ]);
     const tatShape = (kind: 'created' | 'touch' | 'activity') => shapeTat(tatRows, kind);
     // Total leads: lead-created basis = leads created in the window (touched or not); touch-date basis = created in the window OR touched in it
@@ -507,7 +516,7 @@ overview.get('/overview', (c) =>
     const icStatusAll = fold(icStatus, 'ic_status', (r, u) => ({ key: r?.key ?? u.key, leads: (r?.leads ?? 0) + u.leads, ics: (r?.ics ?? 0) + u.ics })).sort((a, b) => b.leads - a.leads);
     const classRawAll = foldDim(classRaw, 'class_raw', 'touches'), lmReasonAll = foldDim(lmReason, 'lm_reason', 'touches');
     const reasonAll = foldDim(reason, 'call_reason'), icCourseAll = foldDim(icCourse, 'ic_course');
-    const sourceAll = foldDim(source, 'no_touch'), mediumAll = foldDim(medium, 'no_touch'), campaignAll = foldDim(campaign, 'no_touch'), staffAll = foldDim(staff, 'no_touch');
+    const leadSourceAll = foldDim(leadSource, 'lead_source'), lastTouchAll = foldDim(lastTouch, 'no_touch'), mediumAll = foldDim(medium, 'no_touch'), campaignAll = foldDim(campaign, 'no_touch'), staffAll = foldDim(staff, 'no_touch');
     const uStage = (key: string) => uBy('stage_conv').find((r) => r.key === key)?.leads ?? 0;
     const defs = (): Record<string, string> => ({
         leads: f.basis === 'created'
@@ -535,6 +544,8 @@ overview.get('/overview', (c) =>
         avg_touches_alltime: 'Average number of touches a paying lead received, no date filter. The headline is weighted by touch rows (a lead with 6 touches counts 6 times), the caption shows the plain per-lead average.',
         avg_touches_window: 'Same as the all-time average, restricted to touches dated inside the window.',
         avg_per_lead: 'Per-lead variant (each converted lead counted once): the honest average number of touches a paying lead received.',
+        lead_source: 'Lead_Master__c.Lead_Source__c: the Lead Source field on the lead record itself, one value per lead (not the Source of a touch). Each lead of the selection counted once; leads without a touch are included, so the Total leads column adds up to the page total. Converted = the dashboard rule for the lead.',
+        last_touch: 'Each lead of the selection counted once, under the touch point of its LAST touch. A converted lead: the touch credited with its payment - the latest touch before its last valid payment; when that touch is an Eduport App / App Installed touch made less than 2 hours before the payment, the touch before it gets the credit (the app touch keeps it when it is the only one). Any other lead: its latest touch in the selection. "(no touch)" = leads of the selection without a touch, so the column adds up to Total leads.',
         lm_reason: 'Lead_Master__c.LM_Reason__c: the reason stored on the lead record itself (set by the salesperson on the lead), one value per lead.',
         reason: 'The Reason recorded on the lead\'s LAST call (Salesforce call log, calls since May 2026). "(no call)" = no call logged in that period; "(no reason recorded)" = the last call was logged without a Reason. The lead\'s own LM Reason field is a separate card and filter.',
         stale_new: `Leads in the selection whose Lead Stage is still "New" although they were created more than ${staleDays} days ago and have had no touch in the last ${staleDays} days (any touch, in any month). "Never touched after creation" = their only touches are from the creation day itself. Only leads with at least one touch exist on this page.`,
@@ -548,7 +559,7 @@ overview.get('/overview', (c) =>
         stale_nc: stale?.stale_nc ?? 0, stale_nc_untouched: stale?.stale_nc_untouched ?? 0, nc_total: stale?.nc_total ?? 0,
       },
       ic_course: icCourseAll, tat: { created: tatShape('created'), touch: tatShape('touch'), activity: tatShape('activity') },
-      touch_point: touchPoint, source: sourceAll, class_raw: classRawAll, reason: reasonAll, lm_reason: lmReasonAll, medium: mediumAll, campaign: campaignAll, staff: staffAll, daily,
+      touch_point: touchPoint, lead_source: leadSourceAll, last_touch: lastTouchAll, class_raw: classRawAll, reason: reasonAll, lm_reason: lmReasonAll, medium: mediumAll, campaign: campaignAll, staff: staffAll, daily,
       definitions: defs(),
     };
     const leadsAll = f.basis === 'created' ? (newLeads?.new_leads ?? k.leads) : (leadsUnion?.n ?? k.leads);
@@ -596,7 +607,7 @@ overview.get('/overview', (c) =>
         ...(fees ?? { fee_payers: 0, fee_payments: 0, fee_received: 0, proposed_fee: 0, fee_enrollments: 0, fee_enrollments_unknown: 0 }), fee_window: feeWin,
       },
       stages: stagesAll, ic_status: icStatusAll, ic_course: icCourseAll, tat: { created: tatShape('created'), touch: tatShape('touch'), activity: tatShape('activity') },
-      touch_point: touchPoint, source: sourceAll, class_raw: classRawAll, reason: reasonAll, lm_reason: lmReasonAll, medium: mediumAll, campaign: campaignAll, staff: staffAll, daily,
+      touch_point: touchPoint, lead_source: leadSourceAll, last_touch: lastTouchAll, class_raw: classRawAll, reason: reasonAll, lm_reason: lmReasonAll, medium: mediumAll, campaign: campaignAll, staff: staffAll, daily,
       definitions: defs(),
     };
   }),

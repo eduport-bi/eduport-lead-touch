@@ -7,7 +7,7 @@ import { FilterViews, SaveView } from './FilterViews';
 /** mode "payment": the range IS the payment date (Converted page) - no basis switch, no second payment window */
 /** Always-visible pickers on the bar (multi-select). Rows clicked in any card write the same state, so they show up here too. */
 const QUICK: { key: ListDim; label: string }[] = [
-  { key: 'class_group', label: 'Class' }, { key: 'touch_point', label: 'Touch point' }, { key: 'source', label: 'Lead source' }, { key: 'campaign', label: 'Campaign' }, { key: 'medium', label: 'Medium' },
+  { key: 'class_group', label: 'Class' }, { key: 'touch_point', label: 'Touch point' }, { key: 'lead_source', label: 'Lead source' }, { key: 'campaign', label: 'Campaign' }, { key: 'medium', label: 'Medium' },
 ];
 // Converted page (mode payment, 2026-11-25): its Class picker lists the core grade titles of the batch bought (purchased_grade); the lead Class
 // does not filter that page, so the Lead class / Purchased class switch and the match tick box are not shown there
