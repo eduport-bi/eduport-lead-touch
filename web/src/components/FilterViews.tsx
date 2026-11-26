@@ -90,18 +90,69 @@ export function FilterViews({ cell = false }: { cell?: boolean } = {}) {
               <div className="max-h-40 overflow-auto">{team.map((v) => row(v, close))}</div>
             </div>
           )}
-          <div className="border-t border-line pt-2">
-            <div className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-ink-3">Save current filters as a view</div>
-            <div className="flex items-center gap-1.5">
-              <input className="input !py-1 flex-1 text-xs" placeholder="View name, e.g. Class 10 CBSE · last 30 days" value={name} maxLength={80}
-                onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) save(); }} />
-              <button className="btn btn-primary !py-1" disabled={busy || !name.trim()} onClick={save}><Icon.Plus /> Save</button>
+          {!cell && (
+            <div className="border-t border-line pt-2">
+              <div className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-ink-3">Save current filters as a view</div>
+              <div className="flex items-center gap-1.5">
+                <input className="input !py-1 flex-1 text-xs" placeholder="View name, e.g. Class 10 CBSE · last 30 days" value={name} maxLength={80}
+                  onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) save(); }} />
+                <button className="btn btn-primary !py-1" disabled={busy || !name.trim()} onClick={save}><Icon.Plus /> Save</button>
+              </div>
+              <label className="mt-1.5 flex cursor-pointer items-center gap-1.5 px-1 text-ink-2">
+                <input type="checkbox" checked={share} onChange={(e) => setShare(e.target.checked)} /> Share with team
+              </label>
             </div>
-            <label className="mt-1.5 flex cursor-pointer items-center gap-1.5 px-1 text-ink-2">
+          )}
+          {cell && <div className="border-t border-line px-1 pt-2 text-ink-3">To add a view, use <b className="text-ink-2">Save</b> next to this box.</div>}
+          {msg && <div className="px-1 text-ink-3">{msg}</div>}
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+/**
+ * The Save box of the filter pane (2026-11-26, replaces the single saved "Default"): asks for a name and saves the current filters as a
+ * named view, which then opens from the Views box. "Share with team" lists it under Team views for everyone.
+ */
+export function SaveView() {
+  const { currentQuery } = useFilters();
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ['filter-views'], queryFn: () => authCall<{ views: View[] }>('/auth/views'), staleTime: 60_000 });
+  const active = (data?.views ?? []).find((v) => v.query === currentQuery);
+  const [name, setName] = useState('');
+  const [share, setShare] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const save = async (close: () => void) => {
+    if (!name.trim()) return;
+    setBusy(true); setMsg(null);
+    try {
+      await authCall('/auth/views', { method: 'POST', body: { name: name.trim(), query: currentQuery, shared: share } });
+      await qc.invalidateQueries({ queryKey: ['filter-views'] });
+      setName(''); setShare(false); close();
+    } catch (e) { setMsg((e as Error).message); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Popover width="w-80" block align="right" trigger={
+      <button type="button" className="flex w-full min-w-0 items-center justify-between gap-1 text-left text-[13px] text-ink hover:text-accent"
+        title={active ? `These filters are saved as the view "${active.name}"` : 'Save the current filters as a named view'}>
+        <span className="truncate">{active ? '✓ Saved' : 'Save as view'}</span> <span className="text-ink-3"><Icon.Plus /></span>
+      </button>}>
+      {(close) => (
+        <div className="space-y-2 text-xs">
+          <div className="px-1 text-[10px] font-semibold uppercase tracking-wide text-ink-3">Save current filters as a view</div>
+          <input className="input !py-1 w-full text-xs" autoFocus placeholder="View name, e.g. Class 10 CBSE · last 30 days" value={name} maxLength={80}
+            onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') save(close); }} />
+          <div className="flex items-center justify-between">
+            <label className="flex cursor-pointer items-center gap-1.5 px-1 text-ink-2">
               <input type="checkbox" checked={share} onChange={(e) => setShare(e.target.checked)} /> Share with team
             </label>
+            <button className="btn btn-primary !py-1" disabled={busy || !name.trim()} onClick={() => save(close)}>{busy ? 'Saving…' : 'Save'}</button>
           </div>
-          {msg && <div className="px-1 text-ink-3">{msg}</div>}
+          {active && <div className="px-1 text-ink-3">These filters are already saved as "{active.name}".</div>}
+          {msg && <div className="px-1 text-red-500">{msg}</div>}
         </div>
       )}
     </Popover>

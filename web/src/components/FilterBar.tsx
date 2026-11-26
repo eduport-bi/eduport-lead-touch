@@ -2,7 +2,7 @@ import { useState, type MouseEvent, type ReactNode } from 'react';
 import { DIM_LABEL, FILTER_MENU, PRESETS, useFilters, type Basis, type ListDim } from '../lib/filters';
 import { Icon, Popover, Toggle } from './ui';
 import { MultiSelect } from './MultiSelect';
-import { FilterViews } from './FilterViews';
+import { FilterViews, SaveView } from './FilterViews';
 
 /** mode "payment": the range IS the payment date (Converted page) - no basis switch, no second payment window */
 /** Always-visible pickers on the bar (multi-select). Rows clicked in any card write the same state, so they show up here too. */
@@ -43,11 +43,8 @@ function Seg<T extends string>({ value, onChange, options, stretch }: { value: T
 const valueText = (v: string[]) => (v.length === 0 ? 'All' : v.length <= 2 ? v.join(', ') : `${v.length} selected`);
 
 export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
-  const { f, set, setList, clearAll, activeCount, saveFilter, forgetFilter, savedQuery, isSaved } = useFilters();
+  const { f, set, setList, clearAll, activeCount } = useFilters();
   const [openDim, setOpenDim] = useState<ListDim | null>(null);
-  const [saving, setSaving] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
-  const onSave = async () => { setSaving('busy'); try { await saveFilter(); setSaving('done'); setTimeout(() => setSaving('idle'), 1500); } catch { setSaving('error'); setTimeout(() => setSaving('idle'), 2500); } };
-  const onForget = async () => { setSaving('busy'); try { await forgetFilter(); setSaving('idle'); } catch { setSaving('error'); setTimeout(() => setSaving('idle'), 2500); } };
 
   const chips: { label: string; onRemove: () => void }[] = [];
   for (const [k, vals] of Object.entries(f.lists)) if (vals?.length && !QUICK_KEYS.has(k) && !(k === 'class_group' && mode === 'payment')) chips.push({ label: `${DIM_LABEL[k] ?? k}: ${vals.length > 2 ? `${vals.slice(0, 2).join(', ')} +${vals.length - 2}` : vals.join(', ')}`, onRemove: () => setList(k as ListDim, []) });
@@ -165,15 +162,10 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
         </div>
         <div className={row}>
           {quick.slice(1).map(picker)}
+          {/* named filter views (2026-11-26): Views opens / manages them, Save names the current filters as a new view. The single saved
+              "Default" filter set was removed at the user's request. */}
           <Cell label="Views"><FilterViews cell /></Cell>
-          {/* saved filter set: one per user (server side); applied automatically on the next visit */}
-          <Cell label="Default" active={isSaved}
-            title={isSaved ? 'This filter set is your saved default: it is applied every time you open the dashboard' : 'Save the current filters as your default: they are applied every time you open the dashboard'}>
-            <button className={`min-w-0 flex-1 truncate text-left ${isSaved ? '' : 'hover:text-accent'}`} disabled={saving === 'busy' || isSaved} onClick={onSave}>
-              {saving === 'busy' ? 'Saving…' : saving === 'done' || isSaved ? '✓ Saved' : saving === 'error' ? 'Could not save' : 'Save current'}
-            </button>
-            {savedQuery != null && !isSaved && <button className="shrink-0 text-ink-3 hover:text-ink" onClick={onForget} title="Remove your saved default filters (the dashboard then opens with the browser's last filters)">Forget</button>}
-          </Cell>
+          <Cell label="Save"><SaveView /></Cell>
         </div>
         </div>
         {/* right edge (user, 2026-11-26): + adds a filter, ✕ removes them all. Stacked, each half of the pane's height. */}

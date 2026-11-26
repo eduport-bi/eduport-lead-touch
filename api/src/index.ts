@@ -113,17 +113,15 @@ export function warmUrls(): string[] {
 
 type FetchCtx = Parameters<typeof app.fetch>[2];
 type WarmRole = 'analyst' | 'bde';
-/** The default views plus, for every saved filter set ("Save filter" on the filter bar, app_auth.user_filters), the Overview and Converted
+/** The default views plus, for every named filter view (app_auth.filter_views), the Overview and Converted
  *  views that user lands on - so the first visit after a sync or a deploy is warm for them as well. A set saved by a bde account is warmed
  *  as that role (masked answers are cached apart from full ones). */
 export async function warmTargets(env: Env, ctx: FetchCtx): Promise<{ url: string; role: WarmRole }[]> {
   const out: { url: string; role: WarmRole }[] = warmUrls().map((url) => ({ url, role: 'analyst' }));
   try {
     const rows: { query: string; role: string | null }[] = await withSql(env, ctx ?? { waitUntil: () => undefined }, (sql) => sql<{ query: string; role: string | null }[]>`
-      SELECT f.query, u.role FROM app_auth.user_filters f
-      LEFT JOIN app_auth.users u ON lower(u.email) = f.email AND u.is_active
-      WHERE f.saved_at <= now()
-      UNION   -- named filter views (sql/053): warmed as the owner's role; a shared view also as a full-access role, for the team
+      -- named filter views (sql/053): warmed as the owner's role; a shared view also as a full-access role, for the team. The single saved
+      -- "Default" filter sets (app_auth.user_filters) are no longer applied by the page (2026-11-26), so they are not warmed
       SELECT v.query, u.role FROM app_auth.filter_views v LEFT JOIN app_auth.users u ON lower(u.email) = v.email AND u.is_active WHERE v.updated_at <= now()
       UNION
       SELECT v.query, 'analyst' FROM app_auth.filter_views v WHERE v.shared AND v.updated_at <= now()`);   // now(): Hyperdrive would otherwise serve a 60 s old answer
