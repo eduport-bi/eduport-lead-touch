@@ -71,9 +71,10 @@ const addDays = (d: Date, n: number) => new Date(d.getTime() + n * 86400e3);
 export const PRESETS: { key: string; label: string; range: () => [string, string] }[] = [
   { key: 'today', label: 'Today', range: () => { const t = todayIST(); return [fmtDate(t), fmtDate(t)]; } },
   { key: 'yesterday', label: 'Yesterday', range: () => { const t = addDays(todayIST(), -1); return [fmtDate(t), fmtDate(t)]; } },
-  { key: '7d', label: 'Last 7 days', range: () => { const t = todayIST(); return [fmtDate(addDays(t, -6)), fmtDate(t)]; } },
-  { key: '30d', label: 'Last 30 days', range: () => { const t = todayIST(); return [fmtDate(addDays(t, -29)), fmtDate(t)]; } },
-  { key: '90d', label: 'Last 90 days', range: () => { const t = todayIST(); return [fmtDate(addDays(t, -89)), fmtDate(t)]; } },
+  // Last N days = the N days before today, today left out (as Metabase's "Previous N days", 2026-11-27)
+  { key: '7d', label: 'Last 7 days', range: () => { const y = addDays(todayIST(), -1); return [fmtDate(addDays(y, -6)), fmtDate(y)]; } },
+  { key: '30d', label: 'Last 30 days', range: () => { const y = addDays(todayIST(), -1); return [fmtDate(addDays(y, -29)), fmtDate(y)]; } },
+  { key: '90d', label: 'Last 90 days', range: () => { const y = addDays(todayIST(), -1); return [fmtDate(addDays(y, -89)), fmtDate(y)]; } },
   { key: 'mtd', label: 'This month', range: () => { const t = todayIST(); return [fmtDate(new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 1))), fmtDate(t)]; } },
   { key: 'lastm', label: 'Last month', range: () => { const t = todayIST(); const s = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - 1, 1)); const e = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 0)); return [fmtDate(s), fmtDate(e)]; } },
   { key: 'fy', label: 'This FY (Apr-Mar)', range: () => { const t = todayIST(); const y = t.getUTCMonth() >= 3 ? t.getUTCFullYear() : t.getUTCFullYear() - 1; return [fmtDate(new Date(Date.UTC(y, 3, 1))), fmtDate(t)]; } },

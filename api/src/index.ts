@@ -97,7 +97,8 @@ async function refreshViews(env: Env) {
 const ymd = (d: Date) => d.toISOString().slice(0, 10);
 export function warmUrls(): string[] {
   const nowIst = new Date(Date.now() + 5.5 * 3600 * 1000);
-  const to = ymd(nowIst); const from = ymd(new Date(nowIst.getTime() - 29 * 86400 * 1000));
+  // the default Last 30 days view: the 30 days before today (2026-11-27: today is left out, as in Metabase)
+  const to = ymd(new Date(nowIst.getTime() - 86400 * 1000)); const from = ymd(new Date(nowIst.getTime() - 30 * 86400 * 1000));
   const base = (basis: 'created' | 'touch') => `from=${from}&to=${to}&basis=${basis}&compare=none`;
   const urls = [
     // Overview is asked for in two halves (part=top / part=rest, 2026-11-26); the top half takes yet_days, the rest half no day count

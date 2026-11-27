@@ -37,11 +37,13 @@ export function presetRange(preset: string, today: string): [string, string] {
   switch (preset) {
     case 'today': return [today, today];
     case 'yesterday': { const y = addDays(today, -1); return [y, y]; }
-    case '7d': return [addDays(today, -6), today];
-    case '90d': return [addDays(today, -89), today];
+    // Last N days end yesterday, today left out (as Metabase's "Previous N days", 2026-11-27)
+    case '7d': return [addDays(today, -7), addDays(today, -1)];
+    case '90d': return [addDays(today, -90), addDays(today, -1)];
     case 'mtd': return [fmt(new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 1))), today];
     case 'lastm': return [fmt(new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - 1, 1))), fmt(new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 0)))];
     case 'fy': { const y = t.getUTCMonth() >= 3 ? t.getUTCFullYear() : t.getUTCFullYear() - 1; return [fmt(new Date(Date.UTC(y, 3, 1))), today]; }
-    case '30d': case 'custom': default: return [addDays(today, -29), today];
+    case '30d': return [addDays(today, -30), addDays(today, -1)];
+    case 'custom': default: return [addDays(today, -29), today];
   }
 }
