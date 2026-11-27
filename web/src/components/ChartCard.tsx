@@ -1,3 +1,4 @@
+import { titleCase, capFirst } from '../lib/format';
 import { useRef, useState, type ReactNode } from 'react';
 import { EmptyState, ErrorBoundary, ErrorNote, Icon, Popover, Skeleton } from './ui';
 import { downloadText, toCsv } from '../lib/format';
@@ -57,7 +58,7 @@ export function ChartCard<Row extends object>(p: ChartCardProps<Row>) {
     const ctx = cv.getContext('2d')!;
     ctx.scale(scale, scale);
     ctx.fillStyle = bg && bg !== 'rgba(0, 0, 0, 0)' ? bg : '#fcfcfb'; ctx.fillRect(0, 0, rect.width, rect.height + 28);
-    ctx.fillStyle = getComputedStyle(host).color; ctx.font = '600 12px Inter, system-ui, sans-serif'; ctx.fillText(p.title, 8, 18);
+    ctx.fillStyle = getComputedStyle(host).color; ctx.font = '600 12px Inter, system-ui, sans-serif'; ctx.fillText(titleCase(p.title), 8, 18);
     ctx.drawImage(img, 0, 28, rect.width, rect.height);
     URL.revokeObjectURL(url);
     const a = document.createElement('a'); a.href = cv.toDataURL('image/png'); a.download = `${name}.png`; a.click();
@@ -77,14 +78,14 @@ export function ChartCard<Row extends object>(p: ChartCardProps<Row>) {
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             {p.tone && <span className="h-3 w-1.5 shrink-0 rounded-full bg-tone-solid" />}
-            <h3 className="truncate text-[13px] font-semibold text-ink">{p.title}</h3>
+            <h3 className="truncate text-[13px] font-semibold text-ink">{titleCase(p.title)}</h3>
             {p.help && (
               <Popover width="w-96" trigger={<button className="rounded p-0.5 text-ink-3 hover:text-ink" title="How is this computed?"><Icon.Help /></button>}>
                 <div className="text-xs leading-relaxed text-ink-2">{p.help}</div>
               </Popover>
             )}
           </div>
-          {p.subtitle && <div className="mt-0.5 text-[11px] leading-tight text-ink-3">{p.subtitle}</div>}
+          {p.subtitle && <div className="mt-0.5 text-[11px] leading-tight text-ink-3">{capFirst(p.subtitle)}</div>}
         </div>
         <div className="flex items-center gap-1">
           {p.actions}

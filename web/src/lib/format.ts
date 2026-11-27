@@ -55,3 +55,21 @@ export function downloadText(name: string, text: string, type = 'text/csv') {
   a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+
+/** Title Case for headings, labels and legends (user, 2026-11-27): every word starts with a capital except the small joining
+ *  words (a, an, and, of, to ...) in the middle. Words that already hold a capital or a digit (LM, UJRA, 2h, iOS) are kept. */
+const SMALL = new Set(['a', 'an', 'the', 'and', 'or', 'nor', 'of', 'to', 'in', 'on', 'at', 'by', 'for', 'vs', 'via', 'as', 'with', 'from']);
+export function titleCase(s: string): string {
+  if (!s) return s;
+  let first = true;
+  return s.replace(/[A-Za-z][A-Za-z']*/g, (w, at: number) => {
+    const prev = s[at - 1] ?? ' ';
+    const isFirst = first && !s.slice(0, at).trim(); first = false;
+    if (/[A-Z0-9]/.test(w) || /[A-Za-z0-9]/.test(prev)) return w;   // already capitalised, or the tail of a word like "2h"
+    const after = s.slice(Math.max(0, at - 2), at);
+    if (!isFirst && SMALL.has(w) && !/[(·:→]\s?$/.test(after)) return w;
+    return w[0]!.toUpperCase() + w.slice(1);
+  });
+}
+/** Subtitles, captions and notes: sentence case, i.e. only the first letter is raised. */
+export const capFirst = (s: string) => (s ? s.replace(/^(\s*)([a-z])/, (_m, p: string, c: string) => p + c.toUpperCase()) : s);

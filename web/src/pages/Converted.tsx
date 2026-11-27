@@ -137,7 +137,7 @@ export default function Converted() {
 
   const card = (title: string, rows: Dim[] | undefined, drillDim: string, tone: string, opts: ConvCardOpts = {}) => (
     <ConvCard key={title} title={title} rows={rows} tone={tone} opts={opts} cols={opts.cols ?? dimCols} loading={q.isLoading} error={q.error} onRetry={q.refetch}
-      help={opts.help ?? `${title}. ${def.credit ?? ''}`} selected={opts.pick ? opts.pick.selected : opts.filterDim ? (f.lists[opts.filterDim] ?? []) : []}
+      help={opts.help ?? def.credit} selected={opts.pick ? opts.pick.selected : opts.filterDim ? (f.lists[opts.filterDim] ?? []) : []}
       onRow={(key) => (opts.pick ? opts.pick.toggle(key) : opts.filterDim ? toggleValue(opts.filterDim, key) : open(`${title} · ${key}`, drillDim, key))}
       onApply={opts.pick ? opts.pick.set : opts.filterDim ? (keys) => setList(opts.filterDim!, keys) : undefined} />
   );
@@ -186,7 +186,7 @@ export default function Converted() {
         {card('Class wise conversion (purchased course)', d?.by_course, 'course', 'tone-violet', { asTable: true, cols: payCols, help: def.course, pick: { selected: courses, toggle: toggleIn(courses, setCourses), set: setCourses } })}
         {card('Purchased grade', d?.by_grade, 'grade', 'tone-amber', { cols: payCols, help: def.grade, height: 280, filterDim: 'purchased_grade' })}
         {card('Touch source distribution (last touch)', d?.by_last_source, 'last_touch_source', 'tone-orange', { filterDim: 'source', asTable: true,
-          help: `Touch source distribution (last touch). ${def.credit ?? ''} The "+" on the App Installed row splits those users by the source of the touch BEFORE the install. ${def.app_prev ?? ''}`,
+          help: `${def.credit ?? ''} The "+" on App Installed shows the source of the touch before the install.`,
           expand: { key: 'App Installed', rows: d?.by_app_prev_source ?? [], onPick: (key) => open(`App Installed (last touch) · touch before it: ${key}`, 'app_prev_source', key, 'paying users credited to an App Installed last touch whose touch before the install has this source · click a row for the lead record') } })}
         {card('Touch source distribution (first touch)', d?.by_first_source, 'first_touch_source', 'tone-orange', { asTable: true, help: def.first_credit })}
         {card('Staff-wise (last touch)', d?.by_last_staff, 'last_touch_staff', 'tone-pink', { filterDim: 'staff', asTable: true })}
@@ -203,6 +203,10 @@ export default function Converted() {
           ]} />}>
           <HBars data={(d?.tat?.[tat]?.buckets ?? []).map((b) => ({ key: b.key, value: b.leads, secondary: d?.tat?.[tat]?.leads ? (b.leads / d.tat[tat].leads) * 100 : null }))} valueLabel="Paying users" secondaryLabel="share" />
         </ChartCard>
+      </div>
+
+      {/* Payments per day takes the whole row (2026-11-27) */}
+      <div>
         <ChartCard title="Payments per day" tone="tone-teal" subtitle="paying users and payments by payment date" loading={q.isLoading} error={q.error} rows={d?.daily ?? []} height={260}>
           <DailyLines data={(d?.daily ?? []).map((r) => ({ d: r.d.slice(5), users: r.users, payments: r.payments }))} xKey="d" lines={[{ key: 'users', label: 'Users' }, { key: 'payments', label: 'Payments' }]} />
         </ChartCard>

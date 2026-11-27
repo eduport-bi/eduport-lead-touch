@@ -60,7 +60,7 @@ export default function TouchAttribution({ mode }: { mode: 'first' | 'last' }) {
 
   const card = (title: string, rows: AttrRow[] | undefined, dim: ListDim, tone: string, opts: { asTable?: boolean; height?: number; limit?: number; help?: string } = {}) => (
     <AttrCard key={title} title={title} rows={rows} dim={dim} tone={tone} opts={opts} cols={cols} label={label} mode={mode} loading={q.isLoading} error={q.error} onRetry={q.refetch}
-      help={opts.help ?? `${title}: ${def.attributed ?? ''} Total leads and Converted are the same measures as the Overview.`} selected={f.lists[dim] ?? []} toggleValue={toggleValue} setList={setList} />
+      help={opts.help ?? `${title}: ${def.attributed ?? ''}`} selected={f.lists[dim] ?? []} toggleValue={toggleValue} setList={setList} />
   );
 
   return (

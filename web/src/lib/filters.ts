@@ -1,3 +1,4 @@
+import { titleCase } from './format';
 /**
  * Global filter state = the URL search params (sticky via localStorage,
  * shareable via link). Every page reads `params` and passes it to the API.
@@ -21,7 +22,7 @@ export const LIST_DIMS = [
 export type ListDim = (typeof LIST_DIMS)[number];
 
 /** The filter chips shown in the "Add filter" menu, in this order */
-export const FILTER_MENU: { key: ListDim; label: string; group: string }[] = [
+export const FILTER_MENU: { key: ListDim; label: string; group: string }[] = ([
   { key: 'lead_source', label: 'Lead source', group: 'Lead' },
   { key: 'lead_stage', label: 'Lead Stage', group: 'Lead' },
   { key: 'class_group', label: 'Class', group: 'Lead' },
@@ -40,7 +41,7 @@ export const FILTER_MENU: { key: ListDim; label: string; group: string }[] = [
   { key: 'medium', label: 'Medium', group: 'Touch' },
   { key: 'campaign', label: 'Campaign', group: 'Touch' },
   { key: 'staff', label: 'Staff (touch)', group: 'Touch' },
-];
+] as { key: ListDim; label: string; group: string }[]).map((m) => ({ ...m, label: titleCase(m.label) }));
 export const DIM_LABEL: Record<string, string> = { ...Object.fromEntries(FILTER_MENU.map((m) => [m.key, m.label])), purchased_grade: 'Class (purchased grade, Converted page)' };
 Object.assign(DIM_LABEL, {
   ad_platform: 'Ad Platform', touch_bucket: 'Touches', first_touch_point: 'First Touch Point', last_touch_point: 'Last Touch Point',

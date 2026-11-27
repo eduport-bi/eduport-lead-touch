@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useApi, downloadWithAuth, type Params } from '../lib/api';
 import { useFilters, DIM_LABEL, type ListDim } from '../lib/filters';
-import { fmtDateTime, fmtInt, fmtINR } from '../lib/format';
+import { fmtDateTime, fmtInt, fmtINR, titleCase } from '../lib/format';
 import { DataTable, type Col } from './DataTable';
 import { LeadDrawer } from './LeadDrawer';
 import { DrillSummary } from './DrillSummary';
@@ -161,7 +161,7 @@ export function DrillDrawer({ drill, onClose }: { drill: Drill; onClose: () => v
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-baseline gap-2">
-              <h2 className="text-base font-extrabold tracking-tight">{drill.title}</h2>
+              <h2 className="text-base font-extrabold tracking-tight">{titleCase(drill.title)}</h2>
               {dimLabel && <span className="chip"><b>{dimLabel}</b>: {value}{pick && <button className="ml-1 text-ink-3 hover:text-ink" title="Remove" onClick={() => setPick(null)}>×</button>}</span>}
               {view === 'list' && d && <span className="text-xs text-ink-3">{fmtInt(d.total)} {noun}</span>}
             </div>

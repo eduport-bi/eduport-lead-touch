@@ -28,7 +28,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const signedIn = (u: Account) => { qc.clear(); setStatus((s) => (s && s !== 'error' ? { ...s, setup_required: false, user: u } : { mode: 'password', setup_required: false, user: u })); };
 
   if (status === null) return <Center><div className="py-6 text-center text-sm text-ink-3">Loading…</div></Center>;
-  if (status === 'error') return <Center><div className="text-sm font-semibold">Cannot reach the server</div><p className="mt-1 text-xs text-ink-3">Check the connection and reload the page.</p><button className="btn btn-primary mt-4" onClick={refresh}>Retry</button></Center>;
+  if (status === 'error') return <Center><div className="text-sm font-semibold">Cannot Reach the Server</div><p className="mt-1 text-xs text-ink-3">Check the connection and reload the page.</p><button className="btn btn-primary mt-4" onClick={refresh}>Retry</button></Center>;
   if (status.mode === 'password' && status.setup_required) return <Setup onDone={signedIn} />;
   if (status.mode === 'password' && !status.user) return <Login onDone={signedIn} />;
   return <AuthContext.Provider value={{ user: status.user, mode: status.mode, refresh, logout }}>{children}</AuthContext.Provider>;
@@ -60,7 +60,7 @@ function Login({ onDone }: { onDone: (u: Account) => void }) {
   };
   return (
     <Center>
-      <div className="mb-4"><div className="text-sm font-semibold">Sign in</div><div className="text-xs text-ink-3">Use the e-mail and password your admin gave you</div></div>
+      <div className="mb-4"><div className="text-sm font-semibold">Sign In</div><div className="text-xs text-ink-3">Use the e-mail and password your admin gave you</div></div>
       <form className="space-y-3" onSubmit={submit}>
         <label className="block text-[11px] font-medium text-ink-3">E-mail<input className="input mt-1 w-full" type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" placeholder="you@eduport.ai" /></label>
         <label className="block text-[11px] font-medium text-ink-3">Password<input className="input mt-1 w-full" type="password" required value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" /></label>
@@ -88,7 +88,7 @@ function Setup({ onDone }: { onDone: (u: Account) => void }) {
   };
   return (
     <Center>
-      <div className="mb-4"><div className="text-sm font-semibold">Create the first admin account</div><div className="text-xs text-ink-3">No accounts exist yet. This one-time step creates the admin who will add everyone else.</div></div>
+      <div className="mb-4"><div className="text-sm font-semibold">Create the First Admin Account</div><div className="text-xs text-ink-3">No accounts exist yet. This one-time step creates the admin who will add everyone else.</div></div>
       <form className="space-y-3" onSubmit={submit}>
         <label className="block text-[11px] font-medium text-ink-3">Admin e-mail<input className="input mt-1 w-full" type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" placeholder="bi_team@eduport.ai" /></label>
         <label className="block text-[11px] font-medium text-ink-3">Name<input className="input mt-1 w-full" value={name} onChange={(e) => setName(e.target.value)} placeholder="BI Team" /></label>

@@ -66,7 +66,7 @@ export function DrillSummary({ params, onPick, path }: { params: Params; onPick:
                 {(close) => (
                   <div className="text-xs">
                     <div className="mb-1 flex items-center justify-between">
-                      <span className="font-semibold">Tables to show</span>
+                      <span className="font-semibold">Tables to Show</span>
                       <div className="flex gap-2 text-ink-3"><button className="hover:text-ink" onClick={() => choose(all)}>All</button><button className="hover:text-ink" onClick={() => choose(defaults)}>Default</button></div>
                     </div>
                     <div className="max-h-80 space-y-0.5 overflow-y-auto">

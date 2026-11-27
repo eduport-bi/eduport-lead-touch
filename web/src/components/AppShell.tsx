@@ -11,11 +11,11 @@ import { useUpdating } from '../lib/api';
 
 export const NAV = [
   { to: '/', label: 'Overview', icon: <Icon.Home /> },
-  { to: '/first-touch', label: 'First touch', icon: <Icon.Touch /> },
-  { to: '/last-touch', label: 'Last touch', icon: <Icon.Check /> },
+  { to: '/first-touch', label: 'First Touch', icon: <Icon.Touch /> },
+  { to: '/last-touch', label: 'Last Touch', icon: <Icon.Check /> },
   { to: '/converted', label: 'Converted', icon: <Icon.Spark /> },
   { to: '/analysis', label: 'Analysis', icon: <Icon.Table /> },
-  { to: '/leads', label: 'Lead explorer', icon: <Icon.Users /> },
+  { to: '/leads', label: 'Lead Explorer', icon: <Icon.Users /> },
 ];
 
 export function AppShell() {
@@ -36,11 +36,11 @@ export function AppShell() {
     <div className="flex min-h-screen">
       <aside className="hidden w-56 shrink-0 flex-col border-r border-line bg-surface md:flex">
         <div className="sticky top-0 flex h-screen flex-col p-3">
-          <div className="flex items-center gap-2 px-1 pb-4 pt-1">
+          <div className="flex items-center gap-2 px-0.5 pb-4 pt-1">
             <img src="/eduport-logo.png" alt="Eduport" className="h-10 w-10 rounded-full border border-line bg-white object-cover" />
             <div>
-              <div className="text-sm font-semibold tracking-tight text-accent">eduport</div>
-              <div className="-mt-0.5 text-[10px] font-medium text-ink-3">Lead Touch analytics</div>
+              <div className="whitespace-nowrap text-xl font-semibold leading-tight tracking-tight text-accent">Eduport</div>
+              <div className="whitespace-nowrap text-[13px] font-medium leading-tight tracking-tight text-ink-3">Lead Touch Analytics</div>
             </div>
           </div>
           <div className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-3">Pages</div>
@@ -69,7 +69,7 @@ export function AppShell() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between gap-2 border-b border-line bg-surface px-6 py-2.5">
+        <header className="sticky top-0 z-40 flex items-center justify-between gap-2 border-b border-line bg-surface px-6 py-2.5">
           <div className="flex items-center gap-2">
             <select className="input md:hidden" value={window.location.pathname} onChange={(e) => (window.location.href = e.target.value + window.location.search)}>
               {nav.map((n) => <option key={n.to} value={n.to}>{n.label}</option>)}

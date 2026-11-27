@@ -55,13 +55,13 @@ touchAttribution.get('/touch-attribution', (c) =>
       kpis: { ...k, conv_pct: pct(k.converted, k.leads), attr_pct: pct(k.attributed, k.leads), attr_of_converted_pct: pct(k.attributed, k.converted) },
       touch_point: touchPoint, class_raw: classRaw, source, medium, campaign, daily,
       definitions: {
-        leads: 'Distinct leads with a touch in the window (per row: with a touch of that value).',
-        converted: 'Distinct touched leads with any valid payment dated on/after such a touch.',
+        leads: 'Leads with a touch in the date range.',
+        converted: 'Touched leads that paid on or after a touch.',
         attributed: mode === 'first'
-          ? 'Converted leads whose selected first touch is in the window (per row: has that value). Selected first touch = the lead\'s earliest touch on/after 1 Mar 2026, or its latest touch if it has none after that date. Each converted lead is credited to exactly one touch point / source / medium / campaign / class.'
-          : 'Leads whose last valid touch is in the window (per row: has that value). Last valid touch = the latest touch made before the moment of the lead\'s last valid payment; a touch on the payment day counts when it happened before the payment (payment time, else the record time; if no time is recorded, any touch that day counts). If that last touch is an Eduport App touch made less than 2 hours before the payment, the credit goes to the touch before it; when the app touch is the only touch, it keeps the credit. Each such lead is credited to exactly one touch point / source / medium / campaign / class.',
+          ? 'Converted leads credited to their first touch (the earliest since 1 Mar 2026). Each lead counted once.'
+          : 'Converted leads credited to their last touch before the payment. An app install less than 2 hours before the payment is skipped, unless it is the only touch. Each lead counted once.',
         attr_pct: mode === 'first' ? 'First-touch conversions ÷ Total leads.' : 'Last-touch conversions ÷ Total leads.',
-        share_pct: `${label} of this row ÷ ${label.toLowerCase()} of all rows in the table (adds up to 100%).`,
+        share_pct: `Share of all ${label.toLowerCase()} in the table.`,
         conv_pct: 'Converted ÷ Total leads.',
       },
     };

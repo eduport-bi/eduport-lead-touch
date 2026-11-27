@@ -1,3 +1,4 @@
+import { titleCase } from '../lib/format';
 import { useMemo, useState, type ReactNode } from 'react';
 import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable, type ColumnDef, type SortingState, type Row } from '@tanstack/react-table';
 
@@ -48,7 +49,7 @@ export function DataTable<R extends object>({ rows, columns, compact, onRowClick
   const defs = useMemo<ColumnDef<R>[]>(() => cols.map((c) => ({
     id: c.key,
     accessorFn: (r) => (r as Record<string, unknown>)[c.key],
-    header: c.header,
+    header: titleCase(c.header),
     size: c.width,
     cell: (info) => {
       const v = info.getValue();

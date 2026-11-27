@@ -1,3 +1,4 @@
+import { titleCase, capFirst } from '../lib/format';
 import React, { Component, type ReactNode, useEffect, useRef, useState } from 'react';
 
 export function Skeleton({ className = 'h-6 w-full' }: { className?: string }) { return <div className={`skeleton ${className}`} />; }
@@ -64,7 +65,7 @@ export function Segmented<T extends string>({ value, onChange, options, size = '
       {options.map((o) => (
         <button key={o.value} title={o.title} onClick={() => onChange(o.value)}
           className={`rounded-md px-2.5 ${size === 'xs' ? 'py-0.5 text-[11px]' : 'py-1 text-xs'} font-medium transition ${value === o.value ? 'bg-surface text-accent shadow-sm' : 'text-ink-2 hover:text-ink'}`}>
-          {o.label}
+          {titleCase(o.label)}
         </button>
       ))}
     </div>
@@ -101,8 +102,8 @@ export function PageHeader({ title, subtitle, right }: { title: string; subtitle
   return (
     <div className="mb-1 flex flex-wrap items-end justify-between gap-2">
       <div className="min-w-0">
-        <h1 className="text-lg font-semibold tracking-tight text-ink">{title}</h1>
-        {subtitle && <p className="mt-0.5 text-[11px] text-ink-3">{subtitle}</p>}
+        <h1 className="text-lg font-semibold tracking-tight text-ink">{titleCase(title)}</h1>
+        {subtitle && <p className="mt-0.5 text-[11px] text-ink-3">{capFirst(subtitle)}</p>}
       </div>
       {right}
     </div>

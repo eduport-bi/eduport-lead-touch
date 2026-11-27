@@ -43,7 +43,7 @@ function ChangePassword({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/30 p-4" onClick={onClose}>
       <div className="card w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-3 flex items-center justify-between"><h3 className="text-[13px] font-semibold">Change my password</h3><button className="rounded p-1 text-ink-3 hover:text-ink" onClick={onClose}><Icon.Close /></button></div>
+        <div className="mb-3 flex items-center justify-between"><h3 className="text-[13px] font-semibold">Change My Password</h3><button className="rounded p-1 text-ink-3 hover:text-ink" onClick={onClose}><Icon.Close /></button></div>
         {done ? <div className="text-xs"><div className="text-emerald-600">Password changed. Other devices were signed out.</div><div className="mt-3 flex justify-end"><button className="btn btn-primary" onClick={onClose}>Close</button></div></div> : (
           <form className="space-y-3" onSubmit={submit}>
             <label className="block text-[11px] font-medium text-ink-3">Current password<input className="input mt-1 w-full" type="password" required autoFocus value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" /></label>

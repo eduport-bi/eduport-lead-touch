@@ -267,31 +267,31 @@ converted.get('/converted', (c) =>
       tat: { created: shapeTat(tatRows, 'created'), touch: shapeTat(tatRows, 'touch') },
       definitions: {
         users: pm === 'm0'
-          ? 'Distinct paying app users with a valid payment (payment_method 0, not deleted, is_success, payment_success) whose payment date is in the window. This counts paying app accounts, including people with no Salesforce lead.'
+          ? 'App users with a first payment in the date range, including people with no Salesforce lead.'
           : pm === 'm1'
-            ? 'Paying users with a valid payment of payment_method 1 (gateway EMI instalments; every such row carries an emi_id) dated in the window.'
-            : 'Distinct paying app users with ANY valid payment (any payment_method; not deleted, is_success, payment_success) dated in the window. Switch to "First payment" to count payment_method 0 only, as the Overview does.',
+            ? 'App users with an EMI instalment in the date range.'
+            : 'App users with any valid payment in the date range.',
         sales: pm === 'm0'
-          ? 'Courses sold: one per enrollment (app) or booking (Ujra) with a first payment (payment_method 0) - the first payment of that course - dated in the window, made by a user of the selection. The same unit as Metabase "Total Sales - 1st payment" (which additionally requires a sales person). A user buying two courses counts twice; an instalment on an older course does not count.'
+          ? 'Courses sold = courses whose first payment is in the date range. Two courses bought = two sales. Instalments do not count.'
           : pm === 'm1'
-            ? 'Courses with a follow-up payment (payment_method 1) (an instalment) dated in the window, one per enrollment or booking.'
-            : 'Courses with any valid payment dated in the window, one per enrollment (app) or booking (Ujra): new sales and courses receiving an instalment alike. Switch to "First payment" for sales only.',
-        new_users: 'Paying users whose FIRST ever valid payment is inside the window (new customers).',
-        tat: 'Turnaround time of the paying users in the selection, in calendar days, measured to the user\'s FIRST valid payment day (first method-0 payment in M0 mode). "Lead created → paid": from the creation day of the user\'s Salesforce lead (the most recent lead on the phone) to that payment day; users with no lead are left out; "before lead created" = the lead was created after the first payment. "Last touch → paid": from the latest lead touch on or before that payment day to the payment day; "no prior touch" = no touch before the first payment. Median = half the users were faster.',
-        no_touch: 'Users with no lead touch on/before their payment: no Salesforce lead on that phone, or all touches came after the payment. Shown as "No Touch Before Payment" in the tables.',
+            ? 'Courses with an EMI instalment in the date range.'
+            : 'Courses with any payment in the date range: new sales and instalments.',
+        new_users: 'Users whose first ever payment is in the date range.',
+        tat: 'Days to the user\'s first payment. Lead created → paid = from the lead\'s creation day. Last touch → paid = from the last touch before the payment. Median = half the users were faster.',
+        no_touch: 'Users with no touch before their payment.',
         no_lead: 'Paying users whose phone matches no Salesforce lead.',
-        credit: 'Every user is credited to ONE touch: the latest touch dated on/before its last valid payment day, across all Salesforce leads with the same phone. If that last touch is an Eduport App touch made less than 2 hours before the payment, the credit goes to the touch before it; when the app touch is the only touch, it keeps the credit. Touch point, source, medium, campaign and staff come from that touch.',
-        touches: 'Number of touches on/before the payment for the users in the row.',
-        app_prev: 'Users whose credited LAST touch is an App Installed touch (the rows of the last-touch source card under "App Installed"), split by the source of the touch just before it: the latest earlier touch, dated on/before the last valid payment day, across the Salesforce leads on the account\'s phone or alternative number. "No Earlier Touch" = the app install was the user\'s only touch before paying. Share = of these App Installed users. Rows open the list of those users; the card follows every filter except the source filter (like the source card itself).',
-        first_credit: 'First-touch view: every user is credited to its EARLIEST touch dated on/before its last valid payment day, across all Salesforce leads on the account\'s phone or alternative number - the touch that brought the lead in. "No Touch Before Payment" = no lead on the phone, or every touch came after the payment. The last-touch cards credit the latest such touch instead; the same users appear in both, under possibly different values. Rows open the list of those users.',
-        course: 'Users by the course they bought; a user buying two courses appears under both. The course is the one of the batch on the payment\x27s ENROLLMENT (where the student is enrolled now), with " - Fastrack" / " - Booster" added from the batch name; the batch written on the payment is used only when the enrollment has none.',
-        grade: 'Grade of the course that was bought (batch of the payment\x27s enrollment), not the class recorded on the lead.',
-        class_mix: 'Paying users by the Class on their Salesforce lead (rows) and the class of the course they bought in the window (columns), both with the same names: the course class comes from its grade and course title (SSLC English Medium = Class 10 Board, Class 10 CBSE Tuition = Class 10 CBSE, Plus One Science (CBSE) = Class 11 Science CBSE, Foundation courses = CBSE, CUET crash = Class 12 + stream). Ujra bookings are Integrated. The diagonal is the same class; a user who bought two classes appears in both columns. Lead-only names (Class 11 (no stream), Plus Two Completed) have no matching column.',
-        class_mismatch: 'Users with a class on their lead who bought, in the window, a course of a DIFFERENT class than the one on their lead. Full class names are compared: streams differ (Class 12 Science vs Class 12 Commerce) and so do Board and CBSE (Class 10 Board vs Class 10 CBSE). A lead marked Class 11 or Class 12 with no stream is NOT counted when it bought that class in any stream, Board or CBSE, because its stream is unknown (outlined in the Lead class vs purchased class matrix, with the reason in each cell tooltip). A lead marked Class 11 / 12 CBSE matches only a CBSE course of that class. Crash and repeater courses match Class 12, Plus Two Completed and Repeater leads. A Class 11 lead buying Class 12 counts as different. Leads with no class and Ujra (Integrated) bookings are not counted. % = of the users whose lead has a class.',
-        class_on: 'Class filter (filter-bar switch): "Lead class" = the Class on the Salesforce lead; "Purchased class" = on this page, the class of a course bought in the window.',
-        stage: 'Lead stage of the user\'s most recently created Salesforce lead (one lead per user).',
-        revenue: 'Sum of payment amounts of the users in the row (all their valid payments, any method, any date).',
-        pm: 'Payment method: "All" counts every successful payment; "First payment" counts payment_method 0 only (the first payment of a course; for Ujra the booking payment), the rule the Overview uses; "Follow-up" is the rest (gateway EMI instalments). In the user list, course / grade / payments / revenue cover the payments inside the selected dates; the all-time columns cover every payment of the user.',
+        credit: 'Each user is credited to one touch: the last touch before the payment. An app install less than 2 hours before the payment is skipped, unless it is the only touch.',
+        touches: 'Touches before the payment, for the users in the row.',
+        app_prev: 'Users whose last touch is App Installed, split by the source of the touch before it. No Earlier Touch = the install was the only touch.',
+        first_credit: 'Each user is credited to their first touch before the payment: the touch that brought them in.',
+        course: 'Users by the course they bought. Two courses bought = listed under both.',
+        grade: 'Grade of the course bought, not the class on the lead.',
+        class_mix: 'Rows = class on the lead. Columns = class of the course bought. The diagonal = same class. Ujra bookings = Integrated.',
+        class_mismatch: 'Users who bought a course of a different class than the one on their lead. Class 11 or 12 leads with no stream are not counted. % = of users whose lead has a class.',
+        class_on: 'Class filter: Lead class = the class on the lead. Purchased = the class of the course bought.',
+        stage: 'Lead stage of the user\'s latest Salesforce lead.',
+        revenue: 'All payments of the users in the row, any date.',
+        pm: 'All = every payment. First payment = the first payment of a course (as on Overview). Follow-up = EMI instalments.',
       },
     };
   }),

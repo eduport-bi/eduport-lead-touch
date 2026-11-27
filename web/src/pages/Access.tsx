@@ -101,7 +101,7 @@ export default function Access() {
       <div className="card">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h3 className="text-[13px] font-semibold">CSV export password</h3>
+            <h3 className="text-[13px] font-semibold">CSV Export Password</h3>
             <div className="mt-1 text-xs text-ink-2">
               Every CSV download on every page asks for this one shared password, and each download is written to the activity list below with who exported what.
               {exp === null ? ' Checking…' : exp.configured ? <> Set {fmtDateTime(exp.updated_at)}{exp.updated_by ? ` by ${exp.updated_by}` : ''}.</> : <b className="text-red-600"> Not set yet: all CSV downloads are refused until you set one.</b>}
@@ -126,7 +126,7 @@ export default function Access() {
       </div>
 
       <div className="card">
-        <h3 className="mb-3 text-[13px] font-semibold">Recent activity</h3>
+        <h3 className="mb-3 text-[13px] font-semibold">Recent Activity</h3>
         {audit.length === 0 ? <div className="text-xs text-ink-3">Nothing yet</div> : (
           <div className="max-h-64 overflow-auto">
             <table className="w-full text-xs">

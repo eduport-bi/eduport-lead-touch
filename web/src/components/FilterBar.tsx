@@ -1,3 +1,4 @@
+import { titleCase } from '../lib/format';
 import { useState, type MouseEvent, type ReactNode } from 'react';
 import { DIM_LABEL, FILTER_MENU, PRESETS, useFilters, type Basis, type ListDim } from '../lib/filters';
 import { Icon, Popover, Toggle } from './ui';
@@ -18,10 +19,10 @@ const QUICK_KEYS = new Set<string>([...QUICK.map((q) => q.key), 'purchased_grade
  *  equal share of the row's spare width (flex 1 1 auto), so no box is mostly empty and every row is full. The label line (16 px) and the
  *  value line (24 px) have FIXED heights and start at the same offset in every box, so labels and values line up across the whole grid. */
 function Cell({ label, children, span, onClick, active, title, disabled }: { label: ReactNode; children: ReactNode; span?: string; onClick?: () => void; active?: boolean; title?: string; disabled?: boolean }) {
-  const cls = `flex h-[58px] min-w-[7.5rem] flex-col justify-start gap-1 rounded-lg border bg-surface px-3 py-2 text-left ${active ? 'border-accent/60' : 'border-line'} ${disabled ? 'opacity-50' : ''} ${span ?? 'flex-auto'}`;
+  const cls = `flex h-[50px] min-w-[7.5rem] flex-col justify-start gap-0.5 rounded-lg border bg-surface px-2.5 py-1 text-left ${active ? 'border-accent/60' : 'border-line'} ${disabled ? 'opacity-50' : ''} ${span ?? 'flex-auto'}`;
   const inner = (
     <>
-      <span className={`flex h-4 items-center text-[10px] font-semibold uppercase leading-none tracking-wider text-ink-3`}>{label}</span>
+      <span className={`flex h-3.5 items-center text-[10px] font-semibold uppercase leading-none tracking-wider text-ink-3`}>{label}</span>
       <span className="flex h-6 min-w-0 items-center gap-2 whitespace-nowrap text-[13px] leading-none text-ink">{children}</span>
     </>
   );
@@ -35,7 +36,7 @@ function Seg<T extends string>({ value, onChange, options, stretch }: { value: T
     <span className={`${stretch ? 'flex w-full' : 'inline-flex'} h-6 shrink-0 rounded-md bg-surface-2 p-0.5`}>
       {options.map((o) => (
         <button key={o.value} type="button" title={o.title} onClick={() => onChange(o.value)}
-          className={`${stretch ? 'flex-1' : ''} rounded px-3 text-[13px] leading-none transition ${value === o.value ? 'bg-accent text-white shadow-sm' : 'text-ink-3 hover:text-ink'}`}>{o.label}</button>
+          className={`${stretch ? 'flex-1' : ''} rounded px-3 text-[13px] leading-none transition ${value === o.value ? 'bg-accent text-white shadow-sm' : 'text-ink-3 hover:text-ink'}`}>{titleCase(o.label)}</button>
       ))}
     </span>
   );
@@ -66,7 +67,7 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
   const openPicker = (e: MouseEvent<HTMLInputElement>) => { try { e.currentTarget.showPicker(); } catch { /* older browsers: typing still works */ } };
   // full dates, dd/mm/yyyy, each with its calendar icon: "01/03/2026 📅 → 26/11/2026 📅" (user, 2026-11-26)
   const fmtFull = (d: string) => { const [y, m, dd] = d.split('-'); return y && m && dd ? `${dd}/${m}/${y}` : d; };
-  const presetLabel = PRESETS.find((p) => p.key === f.preset)?.label ?? 'Custom';
+  const presetLabel = titleCase(PRESETS.find((p) => p.key === f.preset)?.label ?? 'Custom');
   // the parts of a date box (from, arrow, to, and the Created / Touch switch when given) are spread with EQUAL gaps across the box
   // (justify-between over siblings), so the spare width is shared evenly instead of piling up in one place. Clicks on the switch do not
   // open the date popover.
@@ -87,13 +88,13 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
     </div>
   );
 
-  const row = mode === 'payment' ? 'contents' : 'flex flex-wrap gap-2';
+  const row = mode === 'payment' ? 'contents' : 'flex flex-wrap gap-1.5';
   return (
-    <div className="sticky top-2 z-30 mb-4 rounded-xl border border-accent/15 bg-accent/5 p-2 shadow-card backdrop-blur">
+    <div className="relative z-30 mb-4 rounded-xl border border-accent/15 bg-accent/5 p-1.5 shadow-card">
       {/* Labelled boxes (user layout, 2026-11-26): label on top, value below, all the same height; + and ✕ at the right.
           Rows: Overview etc. = dates, payment date, class | the pickers, views, default. Converted = one row. Each row is full. */}
-      <div className="flex gap-2">
-        <div className={`flex min-w-0 flex-1 gap-2 ${mode === 'payment' ? 'flex-wrap' : 'flex-col'}`}>
+      <div className="flex gap-1.5">
+        <div className={`flex min-w-0 flex-1 gap-1.5 ${mode === 'payment' ? 'flex-wrap' : 'flex-col'}`}>
         <div className={row}>
           {/* label = "Dates · Last 30 days", value = the range; presets and the two dates open in a popover */}
           <Cell title={mode === 'payment' ? 'On this page the date range is the payment date; touch dates are not checked' : undefined}
@@ -112,7 +113,7 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
                     {PRESETS.map((p) => (
                       <button key={p.key} type="button" title={p.key === 'custom' ? 'Pick your own From and To dates below' : p.label}
                         onClick={() => { if (p.key === 'custom') { set({ preset: 'custom' }); return; } const [from, to] = p.range(); set({ preset: p.key, from, to }); close(); }}
-                        className={`truncate rounded-md border px-2.5 py-1.5 text-left text-[13px] ${f.preset === p.key ? 'border-accent/60 text-ink' : 'border-line text-ink-2 hover:border-accent/40 hover:text-ink'}`}>{p.label.replace(' (Apr-Mar)', '')}</button>
+                        className={`truncate rounded-md border px-2.5 py-1.5 text-left text-[13px] ${f.preset === p.key ? 'border-accent/60 text-ink' : 'border-line text-ink-2 hover:border-accent/40 hover:text-ink'}`}>{titleCase(p.label.replace(' (Apr-Mar)', ''))}</button>
                     ))}
                   </div>
                   {fromTo(f.from, f.to, (from) => set({ preset: 'custom', from }), (to) => set({ preset: 'custom', to }))}
@@ -169,7 +170,7 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
         </div>
         </div>
         {/* right edge (user, 2026-11-26): + adds a filter, ✕ removes them all. Stacked, each half of the pane's height. */}
-        <div className={`grid shrink-0 gap-2 ${mode === "payment" ? "w-24 grid-cols-2" : "w-11 grid-rows-2"}`}>
+        <div className={`grid shrink-0 gap-1.5 ${mode === "payment" ? "w-24 grid-cols-2" : "w-11 grid-rows-2"}`}>
           <div className="min-h-0">
           <Popover width="w-72" block align="right" trigger={
             <button type="button" className={`relative flex h-full w-full items-center justify-center rounded-lg border bg-surface text-ink-2 transition hover:border-accent/40 hover:text-ink ${moreCount ? 'border-accent/60' : 'border-line'}`}

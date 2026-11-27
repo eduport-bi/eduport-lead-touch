@@ -252,7 +252,7 @@ export default function Analysis() {
 
           <ChartCard title="Lead stage" tone="tone-blue" height={Math.max(150, Math.min(360, stageRows.length * 24 + 20))} rows={stageRows} fileName="analysis_lead_stage"
               subtitle={`${fmtInt(summary.leads)} lead records found in the file · bar = leads in that stage · click a bar to filter the results (multi-select)${stages.length ? ` · ${stages.length} selected` : ''}`}
-              help={<div>Every lead found for the numbers in the file, counted by its current LM stage. The same number can have several leads, so the bars add up to the lead records, not to the numbers. "Converted" inside a stage means the lead's number has a valid payment in the app or in Ujra. Switch to the table (⊞) for numbers, converted share and average touches per stage.</div>}
+              help={<div>Leads found for the file's numbers, by current stage. One number can have several leads. Converted = the number has a valid payment. The table (⊞) shows the figures.</div>}
               columns={[{ key: 'stage', header: 'Stage' }, { key: 'leads', header: 'Leads', align: 'right' }, { key: 'numbers', header: 'Numbers', align: 'right' }, { key: 'converted', header: 'Converted', align: 'right' }, { key: 'conversion_pct', header: 'Conversion %', align: 'right', render: (v) => fmtPct(v as number) }, { key: 'avg_touches', header: 'Avg touches', align: 'right' }]}
               empty={!stageRows.length} emptyHint="No leads found for these numbers"
               actions={stages.length ? <button className="btn" onClick={() => setStages([])}>Clear stages</button> : null}>

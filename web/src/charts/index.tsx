@@ -1,3 +1,4 @@
+import { titleCase } from '../lib/format';
 /**
  * Chart primitives (Recharts) styled per the validated palette:
  * thin marks, 2px lines, recessive grid, tooltips with absolute + %, single axis per plot.
@@ -17,7 +18,7 @@ export function Tip({ active, payload, label, rows }: { active?: boolean; payloa
   return (
     <div className="rounded-xl border border-line bg-surface px-3 py-2 text-xs shadow-pop">
       {label !== undefined && <div className="mb-1 font-semibold text-ink">{String(label)}</div>}
-      {rows(d).map(([k, v]) => <div key={k} className="flex justify-between gap-4"><span className="text-ink-3">{k}</span><span className="tabular-nums text-ink">{v}</span></div>)}
+      {rows(d).map(([k, v]) => <div key={k} className="flex justify-between gap-4"><span className="text-ink-3">{titleCase(k)}</span><span className="tabular-nums text-ink">{v}</span></div>)}
     </div>
   );
 }
@@ -104,7 +105,7 @@ export function VBars({ data, xKey, bars, format = fmtInt, onClick, stacked, min
         <Tooltip cursor={{ fill: ink.grid, opacity: 0.4 }} content={<Tip rows={(d) => bars.map((b) => [b.label, format(d[b.key] as number)])} />} />
         {bars.length > 1 && <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 11 }} />}
         {bars.map((b, i) => (
-          <Bar key={b.key} dataKey={b.key} name={b.label} fill={ramp(bars.length)[i]} stackId={stacked ? 's' : undefined} radius={stacked && i < bars.length - 1 ? 0 : [6, 6, 0, 0]} maxBarSize={40} isAnimationActive={false} onClick={(d) => onClick?.(String((d as Record<string, unknown>)[xKey]))} cursor={onClick ? 'pointer' : undefined}>
+          <Bar key={b.key} dataKey={b.key} name={titleCase(b.label)} fill={ramp(bars.length)[i]} stackId={stacked ? 's' : undefined} radius={stacked && i < bars.length - 1 ? 0 : [6, 6, 0, 0]} maxBarSize={40} isAnimationActive={false} onClick={(d) => onClick?.(String((d as Record<string, unknown>)[xKey]))} cursor={onClick ? 'pointer' : undefined}>
             {/* one series: the categories step along the gradient; several series: one shade per series */}
             {bars.length === 1 && ramp(data.length).map((sh, ci) => <Cell key={ci} fill={sh} />)}
           </Bar>
@@ -128,7 +129,7 @@ export function DailyLines({ data, xKey, lines, format = fmtInt, onClick }: { da
         <YAxis {...axis} tickFormatter={fmtCompact} width={44} />
         <Tooltip content={<Tip rows={(d) => lines.map((l) => [l.label, format(d[l.key] as number)])} />} />
         {lines.length > 1 && <Legend iconType="plainline" wrapperStyle={{ fontSize: 11 }} />}
-        {lines.map((l, i) => <Line key={l.key} dataKey={l.key} name={l.label} stroke={ramp(lines.length)[i]} strokeWidth={2} dot={{ r: 2.5, strokeWidth: 0, fill: ramp(lines.length)[i] }} activeDot={{ r: 4 }} isAnimationActive={false} />)}
+        {lines.map((l, i) => <Line key={l.key} dataKey={l.key} name={titleCase(l.label)} stroke={ramp(lines.length)[i]} strokeWidth={2} dot={{ r: 2.5, strokeWidth: 0, fill: ramp(lines.length)[i] }} activeDot={{ r: 4 }} isAnimationActive={false} />)}
       </LineChart>
     </ResponsiveContainer>
   );
@@ -145,7 +146,7 @@ export function Lines({ data, xKey, lines, format = fmtPct, yLabel }: { data: Re
         <YAxis {...axis} tickFormatter={(v) => format(v)} width={52} label={yLabel ? { value: yLabel, angle: -90, position: 'insideLeft', fontSize: 10, fill: ink.muted } : undefined} />
         <Tooltip content={<Tip rows={(d) => lines.map((l) => [l.label, d[l.key] == null ? '–' : format(d[l.key] as number)])} />} />
         {lines.length > 1 && <Legend iconType="plainline" wrapperStyle={{ fontSize: 11 }} />}
-        {lines.slice(0, 8).map((l, i) => <Line key={l.key} dataKey={l.key} name={l.label} stroke={ramp(Math.min(8, lines.length))[i]} strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} connectNulls />)}
+        {lines.slice(0, 8).map((l, i) => <Line key={l.key} dataKey={l.key} name={titleCase(l.label)} stroke={ramp(Math.min(8, lines.length))[i]} strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} connectNulls />)}
       </LineChart>
     </ResponsiveContainer>
   );
