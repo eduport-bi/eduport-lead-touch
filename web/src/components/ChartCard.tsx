@@ -8,6 +8,8 @@ import { DataTable, type Col } from './DataTable';
 
 export interface ChartCardProps<Row extends object> {
   title: string;
+  /** shown in the heading line, right after the title (e.g. the Last / First touch switch) */
+  titleAddon?: ReactNode;
   subtitle?: string;
   /** shown in the "?" popover */
   help?: ReactNode;
@@ -79,6 +81,7 @@ export function ChartCard<Row extends object>(p: ChartCardProps<Row>) {
           <div className="flex items-center gap-1.5">
             {p.tone && <span className="h-3 w-1.5 shrink-0 rounded-full bg-tone-solid" />}
             <h3 className="truncate text-[13px] font-semibold text-ink">{titleCase(p.title)}</h3>
+            {p.titleAddon && <span className="ml-1 shrink-0">{p.titleAddon}</span>}
             {p.help && (
               <Popover width="w-96" trigger={<button className="rounded p-0.5 text-ink-3 hover:text-ink" title="How is this computed?"><Icon.Help /></button>}>
                 <div className="text-xs leading-relaxed text-ink-2">{p.help}</div>

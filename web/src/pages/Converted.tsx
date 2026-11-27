@@ -51,9 +51,9 @@ type Pick = { selected: string[]; toggle: (key: string) => void; set: (keys: str
 /** expand: one row of the table gets a "+" that opens `rows` under it (same columns); clicking a sub-row calls onPick with its key */
 type ConvCardOpts = { filterDim?: ListDim; pick?: Pick; asTable?: boolean; height?: number; limit?: number; help?: string; cols?: Col<Dim>[]; expand?: { key: string; rows: Dim[]; onPick: (key: string) => void } };
 
-function ConvCard({ title, rows, tone, opts, cols, loading, error, onRetry, help, selected, onRow, onApply, control }: {
+function ConvCard({ title, rows, tone, opts, cols, loading, error, onRetry, help, selected, onRow, onApply, control, fileName }: {
   title: string; rows: Dim[] | undefined; tone: string; opts: ConvCardOpts; cols: Col<Dim>[]; loading: boolean; error: unknown; onRetry: () => void; help: string;
-  selected: string[]; onRow: (key: string) => void; onApply?: (keys: string[]) => void; control?: ReactNode;
+  selected: string[]; onRow: (key: string) => void; onApply?: (keys: string[]) => void; control?: ReactNode; fileName?: string;
 }) {
   const [search, setSearch] = useState('');
   const s = search.trim().toLowerCase();
@@ -62,8 +62,9 @@ function ConvCard({ title, rows, tone, opts, cols, loading, error, onRetry, help
   const data = filtered.slice(0, opts.limit ?? 14);
   return (
     <ChartCard title={title} tone={tone} subtitle={rows ? `${fmtInt(filtered.reduce((x, r) => x + r.users, 0))} users${s ? ` in ${filtered.length} matching rows` : ''} · ${opts.filterDim || opts.pick ? `click rows to filter every card (multi-select)${selected.length ? ` · ${selected.length} selected` : ''}` : 'click a row for the users'}` : undefined}
-      loading={loading} error={error} onRetry={onRetry} rows={filtered} columns={cols} height={opts.height ?? 280} help={help}
-      actions={<div className="flex items-center gap-2">{control}<CardSearch value={search} onChange={setSearch} count={filtered.length} onApply={onApply ? () => onApply(filtered.map((r) => r.key)) : undefined} /></div>}>
+      loading={loading} error={error} onRetry={onRetry} rows={filtered} columns={cols} height={opts.asTable ? opts.height ?? 280 : Math.max(opts.height ?? 280, data.length * 24 + 16)} help={help}
+      titleAddon={control} fileName={fileName}
+      actions={<div className="flex items-center gap-2"><CardSearch value={search} onChange={setSearch} count={filtered.length} onApply={onApply ? () => onApply(filtered.map((r) => r.key)) : undefined} /></div>}>
       {opts.asTable
         ? <DataTable rows={filtered} compact maxHeight="100%" initialSort={{ id: 'users', desc: true }} onRowClick={(r) => onRow(r.key)} columns={cols} highlight={(r) => selected.includes(r.key)}
             subRows={opts.expand ? (r) => (r.key === opts.expand!.key && opts.expand!.rows.length ? opts.expand!.rows : undefined) : undefined}
@@ -136,8 +137,8 @@ export default function Converted() {
     { key: 'key', header: '', render: (v) => <span className="block min-w-[8rem] max-w-[14rem] whitespace-normal leading-snug [overflow-wrap:anywhere]">{String(v ?? '')}</span> }, { key: 'users', header: 'Converted (users)', bar: true }, { key: 'touches', header: 'Payments' }, { key: 'revenue', header: 'Revenue (window)', render: (v) => fmtINR(v as number) },
   ];
 
-  const card = (title: string, rows: Dim[] | undefined, drillDim: string, tone: string, opts: ConvCardOpts = {}, control?: ReactNode, cardKey?: string) => (
-    <ConvCard key={cardKey ?? title} control={control} title={title} rows={rows} tone={tone} opts={opts} cols={opts.cols ?? dimCols} loading={q.isLoading} error={q.error} onRetry={q.refetch}
+  const card = (title: string, rows: Dim[] | undefined, drillDim: string, tone: string, opts: ConvCardOpts = {}, control?: ReactNode, cardKey?: string, shownTitle?: string) => (
+    <ConvCard key={cardKey ?? title} control={control} fileName={title} title={shownTitle ?? title} rows={rows} tone={tone} opts={opts} cols={opts.cols ?? dimCols} loading={q.isLoading} error={q.error} onRetry={q.refetch}
       help={opts.help ?? def.credit} selected={opts.pick ? opts.pick.selected : opts.filterDim ? (f.lists[opts.filterDim] ?? []) : []}
       onRow={(key) => (opts.pick ? opts.pick.toggle(key) : opts.filterDim ? toggleValue(opts.filterDim, key) : open(`${title} · ${key}`, drillDim, key))}
       onApply={opts.pick ? opts.pick.set : opts.filterDim ? (keys) => setList(opts.filterDim!, keys) : undefined} />
@@ -151,10 +152,13 @@ export default function Converted() {
       { value: 'first', label: 'First touch', title: 'credited to the first touch before the payment' },
     ]} />;
     return m === 'last'
-      ? card(`${name} (last touch)`, last.rows, last.drill, tone, last.opts ?? {}, sw, name)
-      : card(`${name} (first touch)`, first.rows, first.drill, tone, { help: def.first_credit, ...(first.opts ?? {}) }, sw, name);
+      ? card(`${name} (last touch)`, last.rows, last.drill, tone, last.opts ?? {}, sw, name, name)
+      : card(`${name} (first touch)`, first.rows, first.drill, tone, { help: def.first_credit, ...(first.opts ?? {}) }, sw, name, name);
   };
 
+  // the row of three (2026-11-27): bar cards grow with their bars (24 px each, no inner scroll); Lead stage takes the same height
+  const barsH = (n: number | undefined, min: number) => Math.max(min, Math.min(n ?? 0, 14) * 24 + 16);
+  const topRowH = Math.max(barsH(d?.by_last_touch_point?.length, 260), barsH(d?.by_first_touch_point?.length, 260), barsH(d?.by_grade?.length, 280));
   return (
     <div className="space-y-4">
       <PageHeader title="Converted" subtitle={`payment date ${f.from} → ${f.to} · paying users by PAYMENT date, whatever their touch dates · credited to the last touch before payment`}
@@ -192,7 +196,7 @@ export default function Converted() {
 
       {/* row of three (user, 2026-11-27): lead stage, touch point, purchased grade; then pairs, Turnaround second in the last row */}
       <div className="grid gap-4 xl:grid-cols-3">
-        <ChartCard title="Lead stage distribution" tone="tone-brand" subtitle="converted users by lead stage · click a slice to filter" loading={q.isLoading} error={q.error} rows={d?.by_stage ?? []} columns={dimCols} height={260} help={def.stage}>
+        <ChartCard title="Lead stage distribution" tone="tone-brand" subtitle="converted users by lead stage · click a slice to filter" loading={q.isLoading} error={q.error} rows={d?.by_stage ?? []} columns={dimCols} height={topRowH} help={def.stage}>
           <Donut data={(d?.by_stage ?? []).map((s) => ({ key: s.key === '(null)' ? 'No Salesforce lead' : s.key, value: s.users, selected: (f.lists.lead_stage ?? []).includes(s.key) }))} valueLabel="Converted (users)" centerLabel="users" onClick={(key) => toggleValue('lead_stage', key === 'No Salesforce lead' ? '(null)' : key)} />
         </ChartCard>
         {pair('Touch point analysis', 'tone-teal', { rows: d?.by_last_touch_point, drill: 'last_touch_point', opts: { filterDim: 'touch_point', height: 260 } }, { rows: d?.by_first_touch_point, drill: 'first_touch_point', opts: { height: 260 } })}
