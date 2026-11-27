@@ -7,6 +7,18 @@ import { AuthGate } from './components/AuthGate';
 import { ExportGateProvider } from './lib/exportGate';
 import './index.css';
 
+// After a deploy the old build's page files are gone, so a tab opened before it fails to open a page ("Failed to fetch dynamically
+// imported module"). Reload once to pick up the new build; the session flag stops a reload loop if the file is really missing (2026-11-27).
+window.addEventListener('vite:preloadError', (e) => {
+  try {
+    if (sessionStorage.getItem('lt-reloaded-for-build')) return;
+    sessionStorage.setItem('lt-reloaded-for-build', '1');
+  } catch { /* storage blocked: still reload once */ }
+  e.preventDefault();
+  window.location.reload();
+});
+window.addEventListener('load', () => { setTimeout(() => { try { sessionStorage.removeItem('lt-reloaded-for-build'); } catch { /* ignore */ } }, 10_000); });
+
 const queryClient = new QueryClient({
   defaultQueries: undefined,
   defaultOptions: {

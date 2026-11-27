@@ -36,14 +36,15 @@ interface OverviewResponse {
   definitions: Record<string, string>;
 }
 
-type Measure = 'touches' | 'leads' | 'converted';
-const MEASURE_LABEL: Record<Measure, string> = { touches: 'Total lead touches', leads: 'Total leads', converted: 'Converted' };
+// tables show unique leads only (no touches); Conv % = Converted ÷ Total leads; Converted - First Purchase Ever = the Total converted rule (user, 2026-11-27)
+type Measure = 'leads' | 'converted';
+const MEASURE_LABEL: Record<Measure, string> = { leads: 'Total leads', converted: 'Converted' };
 
 const ALL_COLS: Col<DimRow>[] = [
-  // long values (campaign names) are cut with "…" and shown in full on hover, so a card's table never scrolls sideways (2026-11-26)
-  { key: 'key', header: '', render: (v) => <span className="block max-w-[16rem] truncate" title={String(v ?? '')}>{String(v ?? '')}</span> }, { key: 'leads', header: 'Total leads' }, { key: 'touches', header: 'Total lead touches', bar: true },
+  // long values (course and campaign names) wrap onto a second line instead of being cut (2026-11-27)
+  { key: 'key', header: '', render: (v) => <span className="block min-w-[12rem] max-w-[22rem] whitespace-normal break-words leading-snug">{String(v ?? '')}</span> }, { key: 'leads', header: 'Total leads', bar: true },
   { key: 'converted', header: 'Converted' }, { key: 'conv_rate', header: 'Conv %', render: (v) => fmtPct(v as number) },
-  { key: 'converted_first', header: 'Converted (first payment)' },
+  { key: 'converted_first', header: 'Converted - First Purchase Ever' },
 ];
 
 /** Colourful KPI tile: tinted card, solid icon disc, big number */
@@ -59,19 +60,20 @@ function DimCard({ title, rows, dim, measures, tone, opts, loading, error, onRet
   const [search, setSearch] = useState('');
   const s = search.trim().toLowerCase();
   // a card whose dim is filtered shows only the picked values (2026-11-26)
-  const all = (rows ?? []).filter((r) => !selected.length || selected.includes(r.key));
+  const all = (rows ?? []).filter((r) => !selected.length || selected.includes(r.key))
+    .map((r) => ({ ...r, conv_rate: r.leads ? (r.converted / r.leads) * 100 : null }));
   const filtered = s ? all.filter((r) => r.key.toLowerCase().includes(s)) : all;
   const data = filtered.slice(0, opts.limit ?? 12);
   const [m1, m2] = measures;
-  const cols = ALL_COLS.filter((c) => c.key === 'key' || measures.includes(c.key as Measure) || c.key === 'conv_rate');
+  const cols = ALL_COLS;
   return (
     <ChartCard title={title} tone={tone} subtitle={opts.subtitle ?? (rows ? `${fmtInt(filtered.reduce((x, r) => x + r[m1], 0))} ${MEASURE_LABEL[m1].toLowerCase()}${s ? ` in ${filtered.length} matching rows` : ''}${selected.length ? ` · ${selected.length} selected` : ''} · click rows to filter the other cards (multi-select)` : undefined)}
-      loading={loading} error={error} onRetry={onRetry} rows={filtered} columns={ALL_COLS} height={opts.height ?? 250} className={opts.className}
+      loading={loading} error={error} onRetry={onRetry} rows={filtered} columns={ALL_COLS} height={opts.asTable ? opts.height ?? 250 : Math.max(opts.height ?? 250, data.length * 24 + 16)} className={opts.className}
       actions={<CardSearch value={search} onChange={setSearch} count={filtered.length} onApply={() => setList(dim, filtered.map((r) => r.key))} />}
-      help={opts.help ?? `Touches in the date range by ${title.toLowerCase()}. ${def.dim_converted ?? ''}`}>
+      help={opts.help ?? `Leads by ${title.toLowerCase()}. ${def.dim_converted ?? ''}`}>
       {opts.asTable
         ? <DataTable rows={filtered} compact maxHeight="100%" initialSort={{ id: m1, desc: true }} onRowClick={(r) => { if (r.key !== '(no touch)') toggleValue(dim, r.key); }} columns={cols} highlight={(r) => selected.includes(r.key)} />
-        : <HBars colorful={opts.colorful} data={data.map((r) => ({ key: r.key, value: r[m1], secondary: m2 ? r[m2] : null, selected: selected.includes(r.key), extra: { 'Total leads': fmtInt(r.leads), 'Conv %': fmtPct(r.conv_rate) } }))}
+        : <HBars colorful={opts.colorful} data={data.map((r) => ({ key: r.key, value: r[m1], secondary: m2 ? r[m2] : null, selected: selected.includes(r.key), extra: { 'Conv %': fmtPct(r.conv_rate), 'Converted - First Purchase Ever': fmtInt(r.converted_first) } }))}
             valueLabel={MEASURE_LABEL[m1]} secondaryLabel={m2 ? MEASURE_LABEL[m2] : undefined} secondaryFormat={fmtInt} onClick={(key) => { if (key !== '(no touch)') toggleValue(dim, key); }} />}
     </ChartCard>
   );
@@ -80,13 +82,13 @@ function DimCard({ title, rows, dim, measures, tone, opts, loading, error, onRet
 /** Mirrors the Tableau "Lead Touch - Overview" dashboard: touch-date window, touch grain. */
 export default function Overview() {
   const { f, params, toggleValue, setList, set } = useFilters();
-  // days a lead may sit in New / Not Connected before it counts as waiting (remembered per browser)
-  const [staleDays, setStaleDays] = useState<number>(() => { try { const v = Number.parseInt(localStorage.getItem('lt-stale-days') ?? '', 10); return v >= 1 && v <= 365 ? v : 5; } catch { return 5; } });
-  const changeStale = (v: number) => { const n = Math.max(1, Math.min(365, Math.round(v) || 1)); setStaleDays(n); try { localStorage.setItem('lt-stale-days', String(n)); } catch { /* ignore */ } };
-  const staleQ = useDebounce(staleDays, 500);
+  // Yet to connect: only leads whose touch is at least this many days old (2026-11-27; 0 = all; remembered per browser)
+  const [yetDays, setYetDays] = useState<number>(() => { try { const v = Number.parseInt(localStorage.getItem('lt-yet-days') ?? '', 10); return v >= 0 && v <= 365 ? v : 5; } catch { return 5; } });
+  const changeYet = (v: number) => { const n = Math.max(0, Math.min(365, Math.round(v) || 0)); setYetDays(n); try { localStorage.setItem('lt-yet-days', String(n)); } catch { /* ignore */ } };
+  const yetQ = useDebounce(yetDays, 500);
   // Two halves (2026-11-26): the first screen (tiles, Yet to connect, the funnels) loads at once; the cards further down load when the
   // page is scrolled near them (400 px ahead), so the first screen does not wait behind statements nobody is looking at yet.
-  const q = useApi<OverviewResponse>('/overview', { ...params, part: 'top' });
+  const q = useApi<OverviewResponse>('/overview', { ...params, part: 'top', yet_days: yetQ });
   const restRef = useRef<HTMLDivElement>(null);
   const [restNear, setRestNear] = useState(false);
   useEffect(() => {
@@ -100,7 +102,7 @@ export default function Overview() {
   // the lower half starts only once the top half has its answer (2026-11-26): the two at once doubled the database connections of one
   // visit, and the session pooler (15 clients) then refused requests ("internal error")
   const topDone = q.isSuccess && !q.isFetching;
-  const r = useApi<OverviewResponse>('/overview', { ...params, part: 'rest', stale_days: staleQ }, { enabled: restNear && topDone });
+  const r = useApi<OverviewResponse>('/overview', { ...params, part: 'rest' }, { enabled: restNear && topDone });
   const d = q.data?.data;
   const rd = r.data?.data;
   const k = d?.kpis;
@@ -112,11 +114,7 @@ export default function Overview() {
   const [tat, setTat] = useState<'created' | 'touch' | 'activity'>('created');
   const tatIsCall = tat === 'activity';
   const tatData = rd?.tat?.[tat];
-  const staleRows: { stage: string; metric: DrillMetric; total: number; stale: number; share: number | null; untouched: number }[] = rk ? [
-    { stage: 'New', metric: 'stale_new', total: rk.new_total, stale: rk.stale_new, share: rk.new_total ? (rk.stale_new / rk.new_total) * 100 : null, untouched: rk.stale_new_untouched },
-    { stage: 'Not Connected', metric: 'stale_not_connected', total: rk.nc_total, stale: rk.stale_nc, share: rk.nc_total ? (rk.stale_nc / rk.nc_total) * 100 : null, untouched: rk.stale_nc_untouched },
-  ] : [];
-  const open = (metric: DrillMetric, title: string, dim?: string, value?: string, subtitle?: string) => setDrill({ metric, title, dim, value, subtitle, summary: !dim });
+  const open = (metric: DrillMetric, title: string, dim?: string, value?: string, subtitle?: string) => setDrill({ metric, title, dim, value, subtitle, summary: !dim, ...(metric === 'revised_new' ? { extra: { yet_days: yetQ } } : {}) });
   // academic-year split under a conversion KPI: the three latest years, the rest folded into "other" (sorted by year, latest first)
   // click = the lead list of that KPI restricted to the academic year ('other' = every year not shown)
   const aySplit = (rows: { key: string; leads: number }[], metric: DrillMetric, title: string) => {
@@ -134,6 +132,23 @@ export default function Overview() {
     subtitle: `leads of the selection whose app account paid ${k?.fee_window.from ?? f.from} → ${k?.fee_window.to ?? f.to} · fee received and proposed fee per lead` });
   // the never-touched part of Total converted / Converted before the window: created in the window, no touch on record, first valid payment
   // on/after the creation day (after) or before the window start (before); listed from the lead table like New leads
+  // Yet to connect (2026-11-27): leads of Total leads nobody has contacted since they came into the window; stage = one bar of the card
+  // the card's three groups (user, 2026-11-27): New, Converted, Revised to New = every other stage
+  const yetGroups = (by: { stage: string; leads: number; revised: number }[]) => {
+    const g = (keep: (st: string) => boolean) => by.filter((r) => keep(r.stage)).reduce((a, r) => ({ yet: a.yet + r.revised, leads: a.leads + r.leads }), { yet: 0, leads: 0 });
+    return [
+      { key: 'New', stage: 'New', ...g((st) => st === 'New') },
+      { key: 'Converted', stage: 'Converted', ...g((st) => st === 'Converted') },
+      { key: 'Revised to New', stage: '(revised)', ...g((st) => st !== 'New' && st !== 'Converted') },
+    ];
+  };
+  const openYet = (stage?: string) => setDrill({
+    metric: 'new_leads', title: stage ? `Yet to Connect · ${stage === '(revised)' ? 'Revised to New' : stage}` : 'Yet to Connect',
+    subtitle: `${stage ? (stage === '(revised)' ? 'every stage other than New and Converted · ' : `stage ${stage} · `) : ''}no call, stage or course status change since the lead came into the window${yetQ ? ` (${yetQ}+ days ago)` : ''}`,
+    extra: f.basis === 'created' ? undefined : { scope: 'union' },
+    path: '/overview/new_leads', csvPath: '/overview/new_leads.csv', summaryPath: '/overview/new_leads/summary', columns: NEW_LEAD_COLS, sortOptions: NEW_LEAD_SORTS, defaultSort: 'created_date',
+    dim: 'yet_connect', value: stage ? `${yetQ}|${stage}` : String(yetQ), summary: !stage,
+  });
   const openUntouched = (kind: 'after' | 'before') => setDrill({
     metric: 'new_leads', title: kind === 'after' ? 'Total converted · no touch' : 'Converted before the window · no touch',
     subtitle: kind === 'after'
@@ -175,12 +190,12 @@ export default function Overview() {
           <Kpi tone="tone-teal" icon={<Icon.Touch />} title="Total lead touches" value={fmtInt(k.touches)} sub={`${fmt2(k.touches_per_lead)} touches per lead`} def={def.touches} onClick={() => open('touches', 'Total lead touches')} />
           <Kpi tone="tone-orange" icon={<Icon.Check />} title="Total converted" value={fmtInt(k.converted_first)} sub={f.pay ? `${fmtPct(k.conv_rate_first)} of leads · paid ${f.pfrom} → ${f.pto}` : `${fmtPct(k.conv_rate_first)} of leads · paid after a touch`} def={`${def.converted_first} ${def.conv_ay}`} onClick={() => open('converted_first', 'Total converted', undefined, undefined, 'touched leads of the selection with a first valid payment on/after a touch · the never-touched converted leads are under the "no touch" split')}
             split={[...aySplit(k.conv_ay.after, 'converted_first', 'Total converted'), { label: 'no touch', value: fmtInt(k.converted_untouched), title: 'leads of the selection never touched, first valid payment on/after the day they were created · click for the leads', onClick: () => openUntouched('after') }]} />
-          <Kpi tone="tone-slate" icon={<Icon.Check />} title="Converted before the window" value={fmtInt(k.converted_before)}
-            sub={k.class_on === 'bought' ? `${fmtPct(k.conv_rate_before)} of leads · paid for the class before ${k.window_from}` : `${fmtPct(k.conv_rate_before)} of leads · paid before ${k.window_from}`}
-            def={`${def.converted_before} ${k.class_on === 'bought' ? def.class_on ?? '' : ''} ${def.conv_ay}`} onClick={() => open('converted_before', 'Converted before the window', undefined, undefined, 'touched leads of the selection whose first valid payment is before the window start · the never-touched ones are under the "no touch" split')}
-            split={[...aySplit(k.conv_ay.before, 'converted_before', 'Converted before the window'), { label: 'no touch', value: fmtInt(k.converted_before_untouched), title: 'leads of the selection never touched, first valid payment before the window start · click for the leads', onClick: () => openUntouched('before') }]} />
-          <Kpi tone="tone-violet" icon={<Icon.Avg />} title="Avg touches before conversion" value={fmt2(k.avg_touches_alltime)} def={`${def.avg_touches_alltime} ${def.avg_per_lead}`} onClick={() => open('avg_alltime', 'Avg touches before conversion', undefined, undefined, 'converted leads with their all-time touch counts (no date filter)')} />
-          <Kpi tone="tone-green" icon={<Icon.Calendar />} title="Avg touches before conversion (date-wise)" value={fmt2(k.avg_touches_window)} def={`${def.avg_touches_window} ${def.avg_per_lead}`} onClick={() => open('avg_window', 'Avg touches before conversion (date-wise)', undefined, undefined, 'converted leads touched in the window, with their all-time touch counts')} />
+          <Kpi tone="tone-slate" icon={<Icon.Check />} title="Converted before last touch" value={fmtInt(k.converted_before)}
+            sub={k.class_on === 'bought' ? `${fmtPct(k.conv_rate_before)} of leads · paid for the class before their last touch` : `${fmtPct(k.conv_rate_before)} of leads · paid before their last touch`}
+            def={`${def.converted_before} ${k.class_on === 'bought' ? def.class_on ?? '' : ''} ${def.conv_ay}`} onClick={() => open('converted_before', 'Converted before last touch', undefined, undefined, 'leads whose first valid payment came before their last touch in the selection')}
+            split={aySplit(k.conv_ay.before, 'converted_before', 'Converted before last touch')} />
+          <Kpi tone="tone-violet" icon={<Icon.Avg />} title="Avg touches before conversion" value={fmt2(k.avg_touches_alltime)} def={`${def.avg_touches_alltime} ${def.avg_per_lead}`} onClick={() => open('avg_alltime', 'Avg touches before conversion', undefined, undefined, 'leads in Total converted, with their touches on or before the payment (any date)')} />
+          <Kpi tone="tone-green" icon={<Icon.Calendar />} title="Avg touches before conversion (date-wise)" value={fmt2(k.avg_touches_window)} def={`${def.avg_touches_window} ${def.avg_per_lead}`} onClick={() => open('avg_window', 'Avg touches before conversion (date-wise)', undefined, undefined, 'leads in Total converted, with their touches on or before the payment dated in the range')} />
           <Kpi tone="tone-slate" icon={<Icon.Spark />} title="Stage Converted · not paid" value={fmtInt(k.stage_conv_unpaid)} sub={`of ${fmtInt(k.stage_conv_total)} leads in stage Converted`} def={def.stage_conv_unpaid} onClick={() => open('stage_conv_unpaid', 'Stage Converted · not paid')} />
           <Kpi tone="tone-teal" icon={<Icon.Check />} title="Paid · stage not Converted" value={fmtInt(k.paid_other_stage)} sub="counted in Total converted, but the Salesforce stage was never moved to Converted" def={def.paid_other_stage} onClick={() => open('paid_other_stage', 'Paid · stage not Converted')} />
           <Kpi tone="tone-violet" icon={<Icon.Touch />} title="Lost leads with new activity" value={fmtInt(k.stage_react)} sub={`of ${fmtInt(k.stage_react_total)} lost leads · touched again`} def={def.stage_react}
@@ -192,96 +207,64 @@ export default function Overview() {
         </>}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-3">
-        <ChartCard title="Yet to connect (New)" tone="tone-violet" subtitle="leads with no call, stage change or IC status change on or after their touch in the selection: in New, parked in another stage, or already Converted and touched again · click a bar for the leads"
-          loading={q.isLoading} error={q.error} rows={k?.yet_new_by ?? []} height={240} help={def.yet_new}>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <ChartCard title="Yet to connect" tone="tone-violet" subtitle={`leads of Total leads not contacted since ${f.basis === 'created' ? 'they were created' : 'they were created or last touched'}${yetDays ? ` · ${yetDays}+ days ago` : ''}`}
+          loading={q.isLoading} error={q.error} rows={k?.yet_new_by ?? []} height={240} help={def.yet_new}
+          actions={<div className="flex items-center gap-1 text-[11px] text-ink-2">
+            <span>Days</span>
+            {[0, 3, 5, 7, 10].map((n) => <button key={n} title={n ? `came into the window ${n} or more days ago` : 'every lead, whatever the day'} className={`rounded border px-1.5 py-0.5 ${yetDays === n ? 'border-accent bg-accent/10 font-semibold text-accent' : 'border-line hover:bg-surface-2'}`} onClick={() => changeYet(n)}>{n || 'All'}</button>)}
+            <input type="number" min={0} max={365} className="input !w-16 !py-0.5" title="any number of days" value={yetDays} onChange={(e) => changeYet(Number(e.target.value))} />
+          </div>}>
           {k && (
             <div className="flex h-full flex-col">
               <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-                <button className="text-3xl font-extrabold tracking-tight hover:text-accent" title="click for the leads"
-                  onClick={() => open('revised_new', 'Yet to connect (New)', undefined, undefined, 'leads with no call Task, Lead Stage change or IC status change on or after their first touch in the selection')}>{fmtInt(k.yet_new)}</button>
-                <button className="rounded px-1 text-xs text-ink-3 hover:bg-tone hover:text-ink" title="Lead Stage is New, no call Task and no IC status change after the touch · click for the leads"
-                  onClick={() => setDrill({ metric: 'revised_new', title: 'Yet to connect · already New', summary: true, extra: { scope: 'new' }, subtitle: 'leads in stage New with no call Task and no IC status change on or after their first touch in the selection' })}>already New <b className="text-ink">{fmtInt(k.yet_new_already)}</b></button>
-                <button className="rounded px-1 text-xs text-ink-3 hover:bg-tone hover:text-ink" title="parked in another stage, touched again, no call, stage change or IC status change since · click for the leads"
-                  onClick={() => setDrill({ metric: 'revised_new', title: 'Yet to connect · revised to New', summary: true, extra: { scope: 'revised' }, subtitle: 'leads in a stage other than New / Converted with no call Task, Lead Stage change or IC status change on or after their first touch in the selection' })}>revised to New <b className="text-ink">{fmtInt(k.yet_new_revised)}</b></button>
-                <button className="rounded px-1 text-xs text-ink-3 hover:bg-tone hover:text-ink" title="Lead Stage is Converted, touched in the selection, no call logged since · click for the leads"
-                  onClick={() => setDrill({ metric: 'revised_new', title: 'Yet to connect · Converted', summary: true, extra: { scope: 'converted' }, subtitle: 'leads in stage Converted with no call Task on or after their first touch in the selection' })}>Converted <b className="text-ink">{fmtInt(k.yet_new_converted)}</b></button>
+                <button className="text-3xl font-extrabold tracking-tight hover:text-accent" title="click for the leads" onClick={() => openYet()}>{fmtInt(k.yet_new)}</button>
+                {yetGroups(k.yet_new_by).map((g) => (
+                  <button key={g.key} className="rounded px-1 text-xs text-ink-3 hover:bg-tone hover:text-ink" title={`${fmtInt(g.leads)} leads in ${g.key === 'Revised to New' ? 'other stages' : `stage ${g.key}`} · click for the leads`} onClick={() => openYet(g.stage)}>
+                    {g.key} <b className="text-ink">{fmtInt(g.yet)}</b></button>
+                ))}
               </div>
               <div className="mt-2 min-h-0 flex-1">
-                <HBars colorful data={k.yet_new_by.filter((r) => r.revised > 0).map((r) => ({ key: r.stage, value: r.revised, secondary: r.leads }))} valueLabel="Yet to connect" secondaryLabel="Leads in the stage" secondaryFormat={fmtInt}
-                  onClick={(key) => open('revised_new', `Yet to connect · ${key}`, 'lead_stage', key, key === 'New' ? 'leads in stage New with no call Task and no IC status change on or after their first touch in the selection' : key === 'Converted' ? 'leads in stage Converted with no call Task on or after their first touch in the selection' : `leads parked in ${key} with no call Task, Lead Stage change or IC status change on or after their first touch in the selection`)} />
+                <HBars colorful data={yetGroups(k.yet_new_by).map((g) => ({ key: g.key, value: g.yet, secondary: g.leads }))} valueLabel="Yet to connect" secondaryLabel="Leads in the stage" secondaryFormat={fmtInt}
+                  onClick={(key) => openYet(yetGroups(k.yet_new_by).find((g) => g.key === key)?.stage)} />
               </div>
             </div>
           )}
         </ChartCard>
         <ChartCard title="Lead funnel · LM stage" tone="tone-brand" subtitle="Total leads by current Lead Stage · click a slice to filter" loading={q.isLoading} error={q.error} rows={d?.stages ?? []} height={240}
-          help="Current Lead Stage of the touched leads.">
+          help="Current Lead Stage of every lead in Total leads.">
           <Donut data={(d?.stages ?? []).map((s) => ({ key: s.key, value: s.leads, secondary: s.converted, selected: (f.lists.lead_stage ?? []).includes(s.key) }))} valueLabel="Total leads" secondaryLabel="Converted" centerLabel="leads" onClick={(key) => toggleValue('lead_stage', key)} />
-        </ChartCard>
-        <ChartCard title="Lead funnel · IC status" tone="tone-pink" subtitle="Total leads by Interested Course status · click a bar to filter (IC status)" loading={q.isLoading} error={q.error} rows={d?.ic_status ?? []} height={240}
-          help="Interested Course status of the touched leads. A lead with several courses appears under each.">
-          <HBars colorful data={(d?.ic_status ?? []).map((s) => ({ key: s.key, value: s.leads, secondary: s.ics }))} valueLabel="Total leads" secondaryLabel="Interested courses" secondaryFormat={fmtInt} onClick={(key) => toggleValue('ic_status', key)} />
         </ChartCard>
       </div>
 
       <div ref={restRef} />
       {r.error && <Note>⚠ {r.error.message}</Note>}
       <div className="grid gap-4 xl:grid-cols-2">
-        {dimCard('Touch point analysis', rd?.touch_point, 'touch_point', ['touches', 'converted'], 'tone-teal', { colorful: true, height: 270 })}
+        {/* IC status opens the card grid (2026-11-27): it moved down from the top row */}
+        <ChartCard title="Lead funnel · IC status" tone="tone-pink" subtitle="Total leads by Interested Course status · click a bar to filter (IC status)" loading={q.isLoading} error={q.error} rows={d?.ic_status ?? []} height={240}
+          help="Interested Course status of the leads in Total leads. A lead with several courses appears under each.">
+          <HBars colorful data={(d?.ic_status ?? []).map((s) => ({ key: s.key, value: s.leads, secondary: s.ics }))} valueLabel="Total leads" secondaryLabel="Interested courses" secondaryFormat={fmtInt} onClick={(key) => toggleValue('ic_status', key)} />
+        </ChartCard>
+        {dimCard('Touch point analysis', rd?.touch_point, 'touch_point', ['leads', 'converted'], 'tone-teal', { colorful: true, height: 270 })}
         {dimCard('Lead source distribution', rd?.lead_source, 'lead_source', ['leads', 'converted'], 'tone-orange', { asTable: true, height: 270, subtitle: 'Total leads by the Lead Source on the lead record · each lead once · click rows to filter the other cards', help: def.lead_source })}
         {dimCard('Last touch distribution', rd?.last_touch, 'touch_point', ['leads', 'converted'], 'tone-brand', { asTable: true, height: 270, subtitle: 'Total leads by the touch point of their LAST touch · an app touch less than 2 hours before the payment is passed over · click rows to filter by touch point', help: def.last_touch })}
-        {dimCard('Class (Lead Master)', rd?.class_raw, 'class_raw', ['touches', 'converted'], 'tone-violet', { limit: 14, height: 300, colorful: true, help: 'The Class on the lead record, not the course bought. Purchased classes are on the Converted page.' })}
-        {dimCard('LM Reason', rd?.lm_reason, 'lm_reason', ['leads'], 'tone-amber', { limit: 14, height: 300, help: def.lm_reason, subtitle: 'Total leads by the LM Reason field on the lead · click a row to filter every card' })}
+        {dimCard('Class (Lead Master)', rd?.class_raw, 'class_raw', ['leads', 'converted'], 'tone-violet', { limit: 14, height: 300, colorful: true, help: 'The Class on the lead record, not the course bought. Purchased classes are on the Converted page.' })}
+        {dimCard('LM Reason', rd?.lm_reason, 'lm_reason', ['leads', 'converted'], 'tone-amber', { limit: 14, height: 300, help: def.lm_reason, subtitle: 'Total leads by the LM Reason field on the lead · click a row to filter every card' })}
         {dimCard('Interested course', rd?.ic_course, 'ic_course', ['leads', 'converted'], 'tone-pink', { asTable: true, height: 300, help: def.ic_course, subtitle: 'Total leads by the course on their Interested Course records (interest, not purchase) · a lead with several courses appears under each · click rows to filter every page (multi-select)' })}
         {dimCard('Last call reason', rd?.reason, 'call_reason', ['leads', 'converted'], 'tone-amber', { limit: 14, height: 300, help: def.reason, subtitle: 'Total leads by the reason recorded on their last call · click a row to filter every card' })}
         {dimCard('Medium', rd?.medium, 'medium', ['leads', 'converted'], 'tone-green', { asTable: true, height: 260, subtitle: 'Total leads by the medium of their FIRST touch in the selection · each lead once', help: 'Each lead once, under the medium of its first touch. Touches = every touch with that medium.' })}
-        {dimCard('Campaign name', rd?.campaign, 'campaign', ['leads', 'touches'], 'tone-brand', { asTable: true, height: 260, subtitle: 'Total leads by the campaign of their FIRST touch in the selection · each lead once', help: 'Each lead once, under the campaign of its first touch. Touches = every touch of that campaign.' })}
-        {dimCard('Staff-wise', rd?.staff, 'staff', ['leads', 'touches'], 'tone-pink', { asTable: true, height: 300, subtitle: 'Total leads by the staff of their FIRST touch in the selection · each lead once', help: 'Each lead once, under the staff on its first touch. Touches = every touch by that staff.' })}
-        <ChartCard title="Leads still waiting in a stage" tone="tone-red" loading={restLoading} error={r.error} rows={staleRows} height={240}
-          columns={[
-            { key: 'stage', header: 'Stage' }, { key: 'total', header: 'In the stage', align: 'right' },
-            { key: 'stale', header: 'Still there', align: 'right' }, { key: 'share', header: 'Share', align: 'right', render: (v) => fmtPct(v as number) },
-            { key: 'untouched', header: 'Never touched', align: 'right' },
-          ]}
-          subtitle={`still in the stage, created more than ${rk?.stale_days ?? staleDays} days ago and not touched in the last ${rk?.stale_days ?? staleDays} days · click a stage for the leads`}
-          help={`${def.stale_new ?? ''} ${def.stale_nc ?? ''}`}
-          actions={<div className="flex items-center gap-1 text-[11px] text-ink-2">
-            <span>Days</span>
-            {[3, 5, 7, 10, 15].map((n) => <button key={n} className={`rounded border px-1.5 py-0.5 ${staleDays === n ? 'border-accent bg-accent/10 font-semibold text-accent' : 'border-line hover:bg-surface-2'}`} onClick={() => changeStale(n)}>{n}</button>)}
-            <input type="number" min={1} max={365} className="input !w-16 !py-0.5" title="any number of days" value={staleDays} onChange={(e) => changeStale(Number(e.target.value))} />
-          </div>}>
-          {/* one panel per stage (2026-11-26): fills the card next to Turnaround, no table scroll bar; the table view is on the card's table button */}
-          <div className="flex h-full flex-col justify-center gap-3">
-            {staleRows.map((s) => (
-              <button key={s.stage} type="button" className="rounded-xl border border-line px-4 py-3 text-left transition hover:border-accent/40"
-                title="click for the leads"
-                onClick={() => setDrill({ metric: s.metric, title: `Still ${s.stage} after ${rk?.stale_days ?? staleDays} days`, extra: { stale_days: rk?.stale_days ?? staleDays }, summary: true,
-                  subtitle: `leads still in stage ${s.stage}, created more than ${rk?.stale_days ?? staleDays} days ago and not touched in the last ${rk?.stale_days ?? staleDays} days · sorted by last touch` })}>
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="text-sm font-semibold text-ink">{s.stage}</span>
-                  <span className="text-xs text-ink-3">{fmtInt(s.total)} leads in the stage</span>
-                </div>
-                <div className="mt-1 flex items-baseline gap-2">
-                  <span className="text-2xl font-extrabold tracking-tight text-ink">{fmtInt(s.stale)}</span>
-                  <span className="text-xs text-ink-3">still there after {rk?.stale_days ?? staleDays} days · {fmtPct(s.share)}</span>
-                </div>
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-2"><div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, s.share ?? 0)}%` }} /></div>
-                <div className="mt-1.5 text-[11px] text-ink-3">{fmtInt(s.untouched)} never touched after creation</div>
-              </button>
-            ))}
-          </div>
-        </ChartCard>
-        {/* Turnaround sits next to the stale-stage card, so the card grid has no half-empty row (2026-11-26) */}
+        {dimCard('Campaign name', rd?.campaign, 'campaign', ['leads', 'converted'], 'tone-brand', { asTable: true, height: 260, subtitle: 'Total leads by the campaign of their FIRST touch in the selection · each lead once', help: 'Each lead once, under the campaign of its first touch. Touches = every touch of that campaign.' })}
+        {dimCard('Staff-wise', rd?.staff, 'staff', ['leads', 'converted'], 'tone-pink', { asTable: true, height: 300, subtitle: 'Total leads by the staff of their FIRST touch in the selection · each lead once', help: 'Each lead once, under the staff on its first touch. Touches = every touch by that staff.' })}
         <ChartCard title="Turnaround time" tone="tone-green" help={def.tat} loading={restLoading} error={r.error} rows={tatData?.buckets ?? []} height={240}
           subtitle={tatData ? `${fmtInt(tatData.leads)} ${tatIsCall ? 'leads' : 'converted leads'} · median ${tatData.median_days == null ? '–' : fmt1(tatData.median_days)} d · average ${tatData.avg_days == null ? '–' : fmt1(tatData.avg_days)} d${tatIsCall ? ' (leads with an activity)' : ''} · click a band for the leads` : tatIsCall ? 'days from the first touch in the range to the first activity on or after it' : 'days to the first payment, converted leads only'}
           actions={<Segmented size="xs" value={tat} onChange={setTat} options={[
             { value: 'created', label: 'Lead created → paid', title: 'days from the lead\'s creation day to its first valid payment day' },
             { value: 'touch', label: 'Last touch → paid', title: 'days from the latest touch on or before the payment to the payment day' },
-            { value: 'activity', label: 'First touch → first activity', title: 'every lead of the selection: days from its earliest touch in the range to the first activity (Task on the Lead Master or one of its Interested Courses) on or after that touch, any later date' },
+            { value: 'activity', label: 'Last touch → first activity', title: 'every lead of the selection: days from its latest touch in the range to the first activity (Task on the Lead Master or one of its Interested Courses) on or after that touch, any later date' },
           ]} />}>
           <HBars data={(tatData?.buckets ?? []).map((b) => ({ key: b.key, value: b.leads, secondary: tatData?.leads ? (b.leads / tatData.leads) * 100 : null }))} valueLabel={tatIsCall ? 'Leads' : 'Converted leads'} secondaryLabel="share"
             onClick={(key) => tatIsCall
-              ? open('leads', `Turnaround · ${key}`, 'tat_activity', key, key === 'no activity' ? 'leads of the selection with no activity (Task) on or after their first touch' : `leads whose first activity (Task on the lead or its interested courses) after their first touch came ${key} later`)
+              ? open('leads', `Turnaround · ${key}`, 'tat_activity', key, key === 'no activity' ? 'leads of the selection with no activity (Task) on or after their last touch' : `leads whose first activity (Task on the lead or its interested courses) after their last touch came ${key} later`)
               : open('converted', `Turnaround · ${key}`, tat === 'created' ? 'tat_created' : 'tat_touch', key, tat === 'created' ? `converted leads whose first payment came ${key} after the lead was created` : `converted leads whose first payment came ${key} after their last touch`)} />
         </ChartCard>
       </div>

@@ -171,7 +171,7 @@ export default function Analysis() {
     { key: 'touch_points', header: 'All touch points' }, { key: 'campaigns', header: 'Campaigns' },
     { key: 'converted', header: 'Converted', render: (v) => (v ? 'Yes' : 'No') }, { key: 'payments', header: 'Payments', align: 'right' }, { key: 'first_payment_date', header: 'First payment' }, { key: 'converted_academic_year', header: 'Converted in (academic year)' }, { key: 'last_payment_date', header: 'Last payment' }, { key: 'last_paid_academic_year', header: 'Last paid academic year' }, { key: 'academic_years', header: 'Academic years paid' },
     { key: 'revenue', header: 'Revenue', render: (v) => (v == null ? '–' : fmtINR(v as number)) }, { key: 'courses', header: 'Courses bought' },
-    { key: 'sf_is_converted', header: 'SF converted flag', render: (v) => (v ? 'Yes' : 'No') }, { key: 'is_duplicate', header: 'Duplicate', render: (v) => (v ? 'Yes' : 'No') }, { key: 'lead_id', header: 'Salesforce Id' },
+    { key: 'lead_id', header: 'Salesforce Id' },
     ...extraCols,
   ];
 

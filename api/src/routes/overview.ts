@@ -3,7 +3,7 @@ import type { Sql } from 'postgres';
 import type { AppEnv } from '../env';
 import { handle, pct, timedAll } from '../http';
 import { LIST_KEYS, paymentPeriod, icCourseExpr, icCourseIn, boughtBases, classPaid, classPopulation, classMatchKeep, type Filters, type Frag, type Period } from '../filters';
-import { newLeadWhere } from './new_leads';
+import { newLeadWhere, yetRows } from './new_leads';
 
 /**
  * GET /api/overview  - everything on the Tableau "Lead Touch - Overview" dashboard in one call.
@@ -58,10 +58,13 @@ export function convAfterCond(sql: Sql, f: Filters, winFrom: string): Frag {
   return sql`(${convFirstCond(sql, f)} AND t.converted_at >= ${winFrom})`;
 }
 /** Converted before the window (touch row t): first valid payment before the window start; purchased class: a class payment before it */
-export function convBeforeCond(sql: Sql, f: Filters, winFrom: string): Frag {
+/** Converted before the last touch (user, 2026-11-27; was "before the window"): the lead's first valid payment is dated before one of its
+ *  touches in the selection, i.e. before its last touch there - a customer who was touched again. Row condition on a touch row t;
+ *  bool_or over the lead's rows. Payment window on: that payment must also be inside it. Purchased class: the date of the class payment. */
+export function convBeforeCond(sql: Sql, f: Filters, pp: Period | null): Frag {
   const bb = boughtBases(f);
-  if (bb) return classPaid(sql, sql`t.lead_id`, bb, sql`cp.payment_date < ${winFrom}`);
-  return sql`(t.converted AND t.converted_at < ${winFrom})`;
+  if (bb) return classPaid(sql, sql`t.lead_id`, bb, pp ? sql`cp.payment_date < t.touch_date AND cp.payment_date BETWEEN ${pp.from} AND ${pp.to}` : sql`cp.payment_date < t.touch_date`);
+  return pp ? sql`(t.converted AND t.converted_at < t.touch_date AND t.converted_at BETWEEN ${pp.from} AND ${pp.to})` : sql`(t.converted AND t.converted_at < t.touch_date)`;
 }
 
 /** main window: basis=created -> leads created in the range (all their touches); otherwise touches dated in the range */
@@ -168,8 +171,27 @@ const joinFrags = (sql: Sql, parts: Frag[], sep: Frag) => parts.reduce((a, x) =>
  * (GROUPING SETS) instead of one statement per card: ~0.4 s for seven cards instead of 7 x 0.13 s plus seven pooled connections.
  * A card whose own dim IS filtered keeps its separate byDim (its WHERE drops that filter).
  */
+/** The 2-hour app rule on the touch cards (user, 2026-11-27): an Eduport App touch made less than 2 hours before the lead's last valid
+ *  payment does not make the lead "converted" under that touch's values (touch point, source, medium, campaign, staff) - the same rule as
+ *  the last-touch credit (sql/021), including its exception: when the app touch is the lead's only touch up to then, it still counts -
+ *  unless it came less than 30 minutes before the payment (appOnlyQuick, 2026-11-27). */
+export function appQuickTouch(sql: Sql): Frag {
+  return sql`(t.touch_point = 'Eduport App' AND t.last_payment_at IS NOT NULL AND t.touch_at > t.last_payment_at - interval '2 hours'
+           AND t.touch_at <= t.last_payment_at
+           AND (t.touch_at > t.last_payment_at - interval '30 minutes'
+                OR EXISTS (SELECT 1 FROM analytics.mv_touch_flat t3 WHERE t3.lead_id = t.lead_id AND t3.touch_at < t.touch_at)))`;
+}
+/** The 30-minute rule (user, 2026-11-27): when the Eduport App touch is the lead's ONLY touch up to the payment and was made less than
+ *  30 minutes before it, nobody gets the credit - the lead counts as "no touch" (the 2-hour exception no longer saves it). Touch row t. */
+export function appOnlyQuick(sql: Sql): Frag {
+  return sql`(t.touch_point = 'Eduport App' AND t.last_payment_at IS NOT NULL AND t.touch_at > t.last_payment_at - interval '30 minutes'
+           AND t.touch_at <= t.last_payment_at
+           AND NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t3 WHERE t3.lead_id = t.lead_id AND t3.touch_at < t.touch_at))`;
+}
+
 async function byDims(sql: Sql, w: Frag, cols: CardDim[], conv: Frag, convFirst: Frag): Promise<Record<string, DimRow[]>> {
   const out: Record<string, DimRow[]> = Object.fromEntries(cols.map((c) => [c, []]));
+  const quick = appQuickTouch(sql);
   if (!cols.length) return out;
   const dimCase = joinFrags(sql, cols.map((c) => sql`WHEN GROUPING(t.${sql(c)}) = 0 THEN ${c}`), sql` `);
   const keyCase = joinFrags(sql, cols.map((c) => sql`WHEN GROUPING(t.${sql(c)}) = 0 THEN COALESCE(t.${sql(c)}::text, '(null)')`), sql` `);
@@ -177,8 +199,8 @@ async function byDims(sql: Sql, w: Frag, cols: CardDim[], conv: Frag, convFirst:
   const rows = await sql<(DimRow & { dim: string })[]>`
     SELECT CASE ${dimCase} END AS dim, CASE ${keyCase} END AS key,
            count(*)::int AS touches, count(DISTINCT t.lead_id)::int AS leads,
-           count(DISTINCT t.lead_id) FILTER (WHERE ${conv})::int AS converted,
-           count(DISTINCT t.lead_id) FILTER (WHERE ${convFirst})::int AS converted_first
+           count(DISTINCT t.lead_id) FILTER (WHERE ${conv} AND NOT ${quick})::int AS converted,
+           count(DISTINCT t.lead_id) FILTER (WHERE ${convFirst} AND NOT ${quick})::int AS converted_first
     FROM analytics.mv_touch_flat t WHERE ${w} GROUP BY GROUPING SETS (${sets})`;
   for (const r of rows) { const { dim, ...rest } = r; out[dim]?.push({ ...rest, conv_rate: pct(rest.converted, rest.leads) }); }
   for (const c of cols) out[c] = out[c]!.sort((a, b) => b.touches - a.touches).slice(0, 2000);
@@ -202,7 +224,7 @@ overview.get('/overview', (c) =>
     // "Converted before the window": leads of the selection whose FIRST valid payment is dated before the window start (already customers);
     // the two KPIs never overlap (converted_at >= winFrom vs < winFrom). Purchased class: a payment for the class before the window start
     // (a lead can then be in both: Class 10 bought last year and again this month).
-    const convBefore = convBeforeCond(sql, f, winFrom);
+    const convBefore = convBeforeCond(sql, f, pp);
     // Leads of the selection with NO touch at all (on both bases: created in the window, never touched) are part of Total leads, so they are
     // part of the two conversion KPIs too (user rule, 2026-11-04). "After a touch" cannot apply to them: a never-touched lead is converted when
     // its FIRST valid payment (dashboard rule, phone or alternative number) is on/after the day it was created and not before the window start,
@@ -222,7 +244,8 @@ overview.get('/overview', (c) =>
     const ppWin = pp ? sql`AND cp.payment_date BETWEEN ${pp.from} AND ${pp.to}` : sql``;
     const uAfter = bb ? classPaid(sql, sql`u.lead_id`, bb, sql`cp.payment_date >= u.created_date AND cp.payment_date >= ${winFrom} ${ppWin}`)
       : pp ? sql`(u.first_pay >= u.created_date AND u.first_pay BETWEEN ${pp.from} AND ${pp.to})` : sql`(u.first_pay >= u.created_date AND u.first_pay >= ${winFrom})`;
-    const uBefore = bb ? classPaid(sql, sql`u.lead_id`, bb, sql`cp.payment_date < ${winFrom}`) : sql`(u.first_pay < ${winFrom})`;
+    // never-touched leads have no last touch, so none of them is "converted before the last touch" (2026-11-27)
+    const uBefore = sql`false`;
     const uConvAny = bb ? classPaid(sql, sql`u.lead_id`, bb, sql`cp.payment_date >= u.created_date`) : sql`(u.first_pay >= u.created_date)`;
     // The lead-level cards (LM stage, IC status, class, LM reason, last call reason, interested course) and the two stage tiles count the
     // never-touched leads of the selection as well, so they add up to Total leads (user rule 2026-11-04). One statement over that lead set
@@ -267,6 +290,8 @@ overview.get('/overview', (c) =>
       return rows;
     });
     const staleDays = Math.max(1, Math.min(365, Number.parseInt(q.stale_days ?? '5', 10) || 5));
+    // Yet to connect: only leads whose touch is at least this many days old (2026-11-27; 0 = every lead)
+    const yetDays = Math.max(0, Math.min(365, Number.parseInt(q.yet_days ?? '5', 10) || 0));
     // part=top | rest (2026-11-26): the page asks for the first screen (tiles, Yet to connect, the two funnels) and the cards further down
     // separately, the lower part only when it is scrolled near, so the first screen does not queue behind 12 statements nobody looks at yet.
     // No part = everything (older pages, exports). The never-touched lead rows (untouched_dims) feed both halves, so both run them.
@@ -320,7 +345,7 @@ overview.get('/overview', (c) =>
                count(*) FILTER (WHERE ${conv})::int AS touches_of_converted
         FROM analytics.mv_touch_flat t WHERE ${w}` : none(),
       // leads in the selection still in stage New, created more than N days ago and not touched in the last N days
-      want('stale') ? sql<{ stale_new: number; stale_new_untouched: number; new_total: number; stale_nc: number; stale_nc_untouched: number; nc_total: number }[]>`
+      (false as boolean) && want('stale') ? sql<{ stale_new: number; stale_new_untouched: number; new_total: number; stale_nc: number; stale_nc_untouched: number; nc_total: number }[]>`
         WITH n AS (
           SELECT t.lead_id, max(t.lead_stage) AS stage, max(t.lead_created_date) AS created, max(x.last_touch_at) AS last_touch
           FROM analytics.mv_touch_flat t LEFT JOIN analytics.mv_lead_last_touch x ON x.lead_id = t.lead_id
@@ -331,16 +356,19 @@ overview.get('/overview', (c) =>
                count(*) FILTER (WHERE stage = 'Not Connected' AND stale)::int AS stale_nc, count(*) FILTER (WHERE stage = 'Not Connected' AND stale AND untouched)::int AS stale_nc_untouched, count(*) FILTER (WHERE stage = 'Not Connected')::int AS nc_total
         FROM s` : none(),
       // Tableau formula: AVG over touch rows (of leads with any valid payment) of the lead's all-time touch count
+      // Avg touches before conversion (user, 2026-11-27): the touched leads of Total converted, each counted once; touches on or before the
+      // first valid payment (is_pre_conversion). Overall = those touches on any date; date-wise = only the ones dated inside the range. The
+      // same leads in both, so overall >= date-wise. (Was: all-time touch count incl. touches after paying, weighted by touch rows, and the
+      // overall one ignored the date range: every converted lead in the database.)
       want('avg_window') ? sql<{ avg_rows: number | null; avg_leads: number | null; n_leads: number }[]>`
-        SELECT avg(t.n_touches_all)::float8 AS avg_rows,
-               (SELECT avg(x)::float8 FROM (SELECT max(n_touches_all) AS x FROM analytics.mv_touch_flat t WHERE ${w} AND t.converted GROUP BY lead_id) q) AS avg_leads,
-               count(DISTINCT t.lead_id)::int AS n_leads
-        FROM analytics.mv_touch_flat t WHERE ${w} AND t.converted` : none(),
+        WITH c AS (SELECT DISTINCT t.lead_id FROM analytics.mv_touch_flat t WHERE ${w} AND ${convFirst})
+        SELECT avg(n)::float8 AS avg_rows, avg(n)::float8 AS avg_leads, count(*)::int AS n_leads
+        FROM (SELECT (SELECT count(*) FROM analytics.mv_touch_flat t2 WHERE t2.lead_id = c.lead_id AND t2.is_pre_conversion
+                        AND t2.touch_date BETWEEN ${periods.current.from} AND ${periods.current.to}) AS n FROM c) q` : none(),
       want('avg_alltime') ? sql<{ avg_rows: number | null; avg_leads: number | null; n_leads: number }[]>`
-        SELECT avg(t.n_touches_all)::float8 AS avg_rows,
-               (SELECT avg(x)::float8 FROM (SELECT max(n_touches_all) AS x FROM analytics.mv_touch_flat t WHERE ${wAll} AND t.converted GROUP BY lead_id) q) AS avg_leads,
-               count(DISTINCT t.lead_id)::int AS n_leads
-        FROM analytics.mv_touch_flat t WHERE ${wAll} AND t.converted` : none(),
+        WITH c AS (SELECT DISTINCT t.lead_id FROM analytics.mv_touch_flat t WHERE ${w} AND ${convFirst})
+        SELECT avg(n)::float8 AS avg_rows, avg(n)::float8 AS avg_leads, count(*)::int AS n_leads
+        FROM (SELECT (SELECT count(*) FROM analytics.mv_touch_flat t2 WHERE t2.lead_id = c.lead_id AND t2.is_pre_conversion) AS n FROM c) q` : none(),
       want('stages') ? sql<{ key: string; leads: number; converted: number }[]>`
         SELECT t.lead_stage AS key, count(DISTINCT t.lead_id)::int AS leads, count(DISTINCT t.lead_id) FILTER (WHERE ${conv})::int AS converted
         FROM analytics.mv_touch_flat t WHERE ${wx('lead_stage')} GROUP BY 1 ORDER BY leads DESC` : none(),
@@ -385,13 +413,11 @@ overview.get('/overview', (c) =>
       // leads only calls count: the stage Converted and the course statuses Enrolled / Already Enrolled are set by the payment, not by a
       // call. With a campaign selected the touch is that campaign's.
       // Leads in New are "already New", Converted leads their own split, the others "revised to New" (parked in a stage, touched again, nobody contacted them).
+      // Yet to connect (2026-11-27): every lead of Total leads, by current LM stage; revised = nobody contacted it since whatever brought it
+      // into the window (creation day, or its first touch in the window for an older lead on the touch-date basis), see yetToConnect
       want('revised_new') ? sql<{ stage: string; leads: number; revised: number }[]>`
-        WITH x AS (SELECT t.lead_id, max(t.lead_stage) AS stage, min(t.touch_date) AS first_touch FROM analytics.mv_touch_flat t WHERE ${w} GROUP BY t.lead_id)
-        SELECT COALESCE(x.stage, '(blank)') AS stage, count(*)::int AS leads,
-               count(*) FILTER (WHERE ${activityDays(sql, sql`x.first_touch`)} IS NULL
-                                  AND (x.stage IN ('New', 'Converted') OR NOT COALESCE(d.lm_since >= (x.first_touch::timestamp AT TIME ZONE 'Asia/Kolkata'), false))
-                                  AND (x.stage = 'Converted' OR NOT EXISTS (SELECT 1 FROM analytics.mv_ic_decision i WHERE i.lead_id = x.lead_id AND i.status <> 'New' AND i.ic_since >= (x.first_touch::timestamp AT TIME ZONE 'Asia/Kolkata'))))::int AS revised
-        FROM x LEFT JOIN salesforce.lead_calls lc ON lc.lead_id = x.lead_id LEFT JOIN analytics.mv_lead_decision d ON d.lead_id = x.lead_id
+        SELECT COALESCE(y.stage, '(blank)') AS stage, count(*)::int AS leads, count(*) FILTER (WHERE y.yet)::int AS revised
+        FROM (${yetRows(sql, f, periods.current, yetDays)}) y
         GROUP BY 1 ORDER BY revised DESC, leads DESC` : none(),
       // Turnaround time of the converted leads in the selection: lead created -> first valid payment day, and latest touch on/before that day -> payment day
       want('tat') ? sql<{ kind: string; key: string; leads: number; avg_days: number | null; median_days: number | null }[]>`
@@ -401,12 +427,12 @@ overview.get('/overview', (c) =>
           FROM analytics.mv_touch_flat t WHERE ${w} AND ${conv} AND t.converted_at IS NOT NULL GROUP BY t.lead_id),
         d AS (SELECT 'created' AS kind, (paid - created)::int AS days FROM c
               UNION ALL SELECT 'touch', (paid - last_touch)::int FROM c),
-        -- first touch -> first activity, for EVERY lead of the selection (touch = the lead's earliest touch among the selection's touch rows;
+        -- last touch -> first activity (user, 2026-11-27; was first touch), for EVERY lead of the selection (touch = the lead's latest touch among the selection's touch rows;
         -- activity = the lead's first Task on the Lead Master or its Interested Courses ON OR AFTER that touch, any later date,
         -- salesforce.lead_calls.call_days); none -> days NULL ('no activity')
         a AS (
           SELECT x.lead_id, ${activityDays(sql, sql`x.first_touch`)} AS days
-          FROM (SELECT t.lead_id, min(t.touch_date) AS first_touch FROM analytics.mv_touch_flat t WHERE ${w} GROUP BY t.lead_id) x
+          FROM (SELECT t.lead_id, max(t.touch_date) AS first_touch FROM analytics.mv_touch_flat t WHERE ${w} GROUP BY t.lead_id) x
           LEFT JOIN salesforce.lead_calls lc ON lc.lead_id = x.lead_id)
         SELECT kind, ${tatBucket(sql, sql`days`)} AS key, count(*)::int AS leads, NULL::float8 AS avg_days, NULL::float8 AS median_days FROM d GROUP BY 1, 2
         UNION ALL
@@ -479,11 +505,12 @@ overview.get('/overview', (c) =>
       want('untouched_dims') ? untouchedCards : none(),
       want('last_touch') ? sql<DimRow[]>`
         WITH s AS (
-          SELECT t.lead_id, t.touch_point, COALESCE(t.tab_is_last_touch, false) AS is_last, t.touch_at, t.touch_id, (${conv}) AS c, (${convFirst}) AS cf
+          SELECT t.lead_id, t.touch_point, COALESCE(t.tab_is_last_touch, false) AS is_last, t.touch_at, t.touch_id, (${conv}) AS c, (${convFirst}) AS cf,
+                 (COALESCE(t.tab_is_last_touch, false) AND ${appOnlyQuick(sql)}) AS nc
           FROM analytics.mv_touch_flat t WHERE ${wx('touch_point')}),
         pick AS (SELECT DISTINCT ON (s.lead_id) s.lead_id, s.touch_point FROM s ORDER BY s.lead_id, s.is_last DESC, s.touch_at DESC, s.touch_id DESC),
-        a AS (SELECT s.lead_id, bool_or(s.c) AS c, bool_or(s.cf) AS cf FROM s GROUP BY s.lead_id)
-        SELECT COALESCE(p.touch_point, '(null)') AS key, count(*)::int AS touches, count(*)::int AS leads,
+        a AS (SELECT s.lead_id, bool_or(s.c) AS c, bool_or(s.cf) AS cf, bool_or(s.nc) AS nc FROM s GROUP BY s.lead_id)
+        SELECT CASE WHEN a.nc THEN '(no touch)' ELSE COALESCE(p.touch_point, '(null)') END AS key, count(*)::int AS touches, count(*)::int AS leads,
                count(*) FILTER (WHERE a.c)::int AS converted, count(*) FILTER (WHERE a.cf)::int AS converted_first
         FROM pick p JOIN a ON a.lead_id = p.lead_id GROUP BY 1` : none(),
     ]);
@@ -505,7 +532,8 @@ overview.get('/overview', (c) =>
       const base = r ?? { key: u.key, touches: 0, leads: 0, converted: 0, converted_first: 0 };
       const leads = base.leads + u.leads, converted = base.converted + u.converted;
       return { ...base, leads, converted, converted_first: base.converted_first + u.converted_first, conv_rate: pct(converted, leads) };
-    }).sort((a, b) => b[sortBy] - a[sortBy]);
+    }).map((r) => ({ ...r, conv_rate: pct(r.converted, r.leads) }))   // every row gets its rate, not only the folded ones (2026-11-27)
+      .sort((a, b) => b[sortBy] - a[sortBy]);
     const stagesAll = fold(stages, 'lead_stage', (r, u) => ({ key: r?.key ?? u.key, leads: (r?.leads ?? 0) + u.leads, converted: (r?.converted ?? 0) + u.converted })).sort((a, b) => b.leads - a.leads);
     const icStatusAll = fold(icStatus, 'ic_status', (r, u) => ({ key: r?.key ?? u.key, leads: (r?.leads ?? 0) + u.leads, ics: (r?.ics ?? 0) + u.ics })).sort((a, b) => b.leads - a.leads);
     const classRawAll = foldDim(classRaw, 'class_raw', 'touches'), lmReasonAll = foldDim(lmReason, 'lm_reason', 'touches');
@@ -522,29 +550,29 @@ overview.get('/overview', (c) =>
           : 'Leads with a valid payment on or after one of their touches. Payments match on the phone number or the alternative number.',
         proposed_fee: 'Proposed fee = course fee minus discount, for courses paid in the range. Each course counted once. It is the agreed price, so it is higher than the fee received while instalments are open.',
         fee_received: 'Fee received = the payments made in the range, for the same leads.',
-        tat: 'Days from one step to the next. Lead created → paid = creation day to first payment. Last touch → paid = last touch before the payment to the payment. First touch → first activity = touch day to the first call Task after it. Median = half the leads were faster. Click a band to see the leads.',
+        tat: 'Days from one step to the next. Lead created → paid = creation day to first payment. Last touch → paid = last touch before the payment to the payment. Last touch → first activity = touch day to the first call Task after it. Median = half the leads were faster. Click a band to see the leads.',
         ic_course: 'Leads by the course they showed interest in (not what they bought). A lead with several courses appears under each. Purchased courses are on the Converted page.',
         new_leads: 'Leads created in the range, touched or not. With a touch = at least one touch on record.',
         leads_basis: f.basis === 'created' ? 'Dates = lead created date.' : 'Dates = touch date.',
         converted_first: 'Leads whose first payment came on or after a touch, and inside the window. Never-touched leads count when they paid after the lead was created ("no touch" split).',
         sf_converted: 'Touched leads marked Converted in Salesforce (reference only).',
-        yet_new: 'Leads nobody has contacted since their touch: no call, no stage change and no course status change after it. Already New = still in stage New. Revised to New = was in another stage, touched again, not contacted. Converted = paid earlier, touched again, not called. Click a value or bar to see the leads.',
+        yet_new: `Leads of Total leads nobody has contacted since they came into the window: no call, no stage change and no course status change since the lead was created${f.basis === 'created' ? '' : ', or since its last touch in the range when that is later'}${yetDays ? `, ${yetDays} or more days ago` : ''}. New and Converted = current LM stage. Revised to New = every other stage: worked before, came back, not contacted since.`,
         stage_react: 'Leads in Not Willing Now, Disqualified, Not Connected or P2 Completed that got a new touch after entering that stage.',
         stage_conv_unpaid: 'Leads in stage Converted with no valid payment.',
         paid_other_stage: 'Leads that paid but are not in stage Converted.',
-        converted_before: 'Leads that had already paid before the window started. They are not in Total converted.',
+        converted_before: 'Leads that paid before their last touch in the range: customers who were touched again. A lead can also be in Total converted.',
         class_on: 'Class filter = purchased class: the lead paid for a course of the picked class. One lead can be in both conversion tiles.',
         conv_ay: 'Academic year = the academic year of the course in the lead\x27s latest payment. Ujra bookings have none.',
-        avg_touches_alltime: 'Average touches a paying lead received, all dates.',
-        avg_touches_window: 'Average touches a paying lead received inside the date range.',
-        avg_per_lead: 'The caption counts each lead once.',
+        avg_touches_alltime: 'Leads in Total converted: average touches on or before the payment, any date.',
+        avg_touches_window: 'Leads in Total converted: average touches on or before the payment, dated inside the range.',
+        avg_per_lead: 'Each lead counted once.',
         lead_source: 'The Lead Source on the lead record. Each lead counted once, so the column adds up to Total leads.',
-        last_touch: 'Each lead under its last touch point. For a paying lead, the last touch before the payment; an app install less than 2 hours before the payment is skipped. No touch = leads without a touch.',
+        last_touch: 'Each lead under its last touch point. For a paying lead, the last touch before the payment; an app install less than 2 hours before the payment is skipped. When the app install is the only touch and came less than 30 minutes before the payment, the lead counts as no touch.',
         lm_reason: 'The LM Reason on the lead record, set by the salesperson.',
         reason: 'The reason on the lead\'s last call. No call = no call logged since May 2026.',
         stale_new: `Leads still in stage New, created over ${staleDays} days ago, with no touch in the last ${staleDays} days.`,
         stale_nc: `Same for stage Not Connected.`,
-        dim_converted: 'Converted = leads with a touch of that value that paid. A lead can appear in several rows.',
+        dim_converted: 'Converted = leads with a touch of that value that paid. A lead can appear in several rows. An Eduport App touch less than 2 hours before the payment does not count, unless it is the only touch.',
     });
     if (part === 'rest') return {
       period: periods.current, payment_period: pp, basis: f.basis === 'created' ? 'created' : 'touch', part,
@@ -593,11 +621,9 @@ overview.get('/overview', (c) =>
         stale_new: stale?.stale_new ?? 0, stale_new_untouched: stale?.stale_new_untouched ?? 0, new_total: stale?.new_total ?? 0, stale_days: staleDays,
         stale_nc: stale?.stale_nc ?? 0, stale_nc_untouched: stale?.stale_nc_untouched ?? 0, nc_total: stale?.nc_total ?? 0,
         new_leads: newLeads?.new_leads ?? 0, new_leads_touched: newLeads?.new_leads_touched ?? 0,
+        // Yet to connect over Total leads (2026-11-27), split by current LM stage
         yet_new: revisedNew.reduce((a, r) => a + r.revised, 0),
-        yet_new_already: revisedNew.filter((r) => r.stage === 'New').reduce((a, r) => a + r.revised, 0),
-        yet_new_revised: revisedNew.filter((r) => r.stage !== 'New' && r.stage !== 'Converted').reduce((a, r) => a + r.revised, 0),
-        yet_new_converted: revisedNew.filter((r) => r.stage === 'Converted').reduce((a, r) => a + r.revised, 0),
-        yet_new_by: revisedNew,
+        yet_new_by: revisedNew, yet_days: yetDays,
         ...(fees ?? { fee_payers: 0, fee_payments: 0, fee_received: 0, proposed_fee: 0, fee_enrollments: 0, fee_enrollments_unknown: 0 }), fee_window: feeWin,
       },
       stages: stagesAll, ic_status: icStatusAll, ic_course: icCourseAll, tat: { created: tatShape('created'), touch: tatShape('touch'), activity: tatShape('activity') },

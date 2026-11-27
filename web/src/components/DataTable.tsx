@@ -25,11 +25,14 @@ interface Props<R extends object> {
   /** rows that have children get a "+" in their first cell; the children render under the parent (same columns, bars relative to the parent) */
   subRows?: (r: R) => R[] | undefined;
   onSubRowClick?: (parent: R, child: R) => void;
+  /** server-side sorting (lead lists, 2026-11-27): a click on a column name asks the server to sort every row, not only the page;
+   *  sortId maps a column to the server's sort key (null = that column cannot be sorted) */
+  serverSort?: { sort: { id: string; desc: boolean }; onSort: (s: { id: string; desc: boolean }) => void; sortId: (colKey: string) => string | null };
 }
 
 const isNum = (v: unknown): v is number => typeof v === 'number';
 
-export function DataTable<R extends object>({ rows, columns, compact, onRowClick, renderExpanded, initialSort, maxHeight, rowKey, highlight, subRows, onSubRowClick }: Props<R>) {
+export function DataTable<R extends object>({ rows, columns, compact, onRowClick, renderExpanded, initialSort, maxHeight, rowKey, highlight, subRows, onSubRowClick, serverSort }: Props<R>) {
   const [sorting, setSorting] = useState<SortingState>(initialSort ? [initialSort] : []);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set());
@@ -67,7 +70,7 @@ export function DataTable<R extends object>({ rows, columns, compact, onRowClick
     sortingFn: 'basic',
   })), [cols, maxes]);
 
-  const table = useReactTable({ data: rows, columns: defs, state: { sorting }, onSortingChange: setSorting, getCoreRowModel: getCoreRowModel(), getSortedRowModel: getSortedRowModel() });
+  const table = useReactTable({ data: rows, columns: defs, state: { sorting: serverSort ? [] : sorting }, onSortingChange: setSorting, getCoreRowModel: getCoreRowModel(), getSortedRowModel: getSortedRowModel(), manualSorting: !!serverSort });
 
   const key = (r: Row<R>) => (rowKey ? rowKey(r.original) : r.id);
   return (
@@ -79,9 +82,14 @@ export function DataTable<R extends object>({ rows, columns, compact, onRowClick
               {renderExpanded && <th className="th w-6" />}
               {hg.headers.map((h) => {
                 const c = cols.find((x) => x.key === h.id);
-                const dir = h.column.getIsSorted();
+                const sid = serverSort ? serverSort.sortId(h.id) : null;
+                const dir = serverSort ? (sid && serverSort.sort.id === sid ? (serverSort.sort.desc ? 'desc' : 'asc') : false) : h.column.getIsSorted();
+                const onHead = serverSort
+                  ? (sid ? () => serverSort.onSort({ id: sid, desc: serverSort.sort.id === sid ? !serverSort.sort.desc : true }) : undefined)
+                  : h.column.getToggleSortingHandler();
                 return (
-                  <th key={h.id} className={`th cursor-pointer select-none ${c?.align === 'right' || isNum((rows[0] as Record<string, unknown> | undefined)?.[h.id]) ? 'text-right' : ''}`} style={{ width: c?.width }} onClick={h.column.getToggleSortingHandler()}>
+                  <th key={h.id} className={`th ${onHead ? 'cursor-pointer' : 'cursor-default'} select-none ${c?.align === 'right' || isNum((rows[0] as Record<string, unknown> | undefined)?.[h.id]) ? 'text-right' : ''}`} style={{ width: c?.width }} onClick={onHead}
+                    title={serverSort ? (sid ? 'Sort all the leads by this column' : 'This column cannot be sorted') : undefined}>
                     {flexRender(h.column.columnDef.header, h.getContext())} {dir === 'asc' ? '▲' : dir === 'desc' ? '▼' : ''}
                   </th>
                 );

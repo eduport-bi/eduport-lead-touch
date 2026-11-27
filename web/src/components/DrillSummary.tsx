@@ -84,7 +84,8 @@ export function DrillSummary({ params, onPick, path }: { params: Params; onPick:
             </div>
             {shown.length === 0
               ? <div className="rounded-lg border border-dashed border-line p-6 text-center text-xs text-ink-3">No tables selected. Use the Tables button to pick the splits you want to see.</div>
-              : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{shown.map((s) => <SplitCard key={s.dim} split={s} total={d.leads} onPick={onPick} />)}</div>}
+              // 2026-11-27: a fixed 2-column grid (4 tables = 2 × 2), the two boxes of a row the same height; no scroll bars inside a box
+              : <div className="grid gap-3 md:grid-cols-2">{shown.map((s) => <SplitCard key={s.dim} split={s} total={d.leads} onPick={onPick} />)}</div>}
           </>
         );
       })()}
@@ -99,27 +100,37 @@ function Head({ label, value, sub }: { label: string; value: string; sub?: strin
 function SplitCard({ split, total, onPick }: { split: Split; total: number; onPick: (dim: string, value: string) => void }) {
   const max = split.rows[0]?.leads ?? 0;
   const hint = split.kind === 'pay' ? 'a lead buying two counts in both' : split.kind === 'touch' ? (split.label.includes('after') ? 'leads with such a touch after the stage change' : 'leads touched there in the window') : undefined;
+  // the top 8 values fit the box; the rest open below with "+ N more" (the box grows, it never scrolls)
+  const TOP = 8;
+  const [all, setAll] = useState(false);
+  const rows = all ? split.rows : split.rows.slice(0, TOP);
+  const more = split.rows.length - TOP;
   return (
-    <div className="rounded-lg border border-line bg-surface p-3">
+    <div className="flex flex-col rounded-lg border border-line bg-surface p-3">
       <div className="mb-2 flex items-baseline justify-between gap-2">
         <div className="text-xs font-semibold">{split.label}</div>
         <div className="text-[10px] text-ink-3">{split.distinct > split.rows.length ? `top ${split.rows.length} of ${split.distinct}` : `${split.distinct} values`}{hint ? ` · ${hint}` : ''}</div>
       </div>
       {split.rows.length === 0 ? <div className="py-4 text-center text-[11px] text-ink-3">No data</div> : (
-        <div className="max-h-56 overflow-y-auto">
+        <div>
           <table className="w-full text-[11px]">
             <tbody>
-              {split.rows.map((x) => (
+              {rows.map((x) => (
                 <tr key={x.key} className="cursor-pointer hover:bg-surface-2" title={`Show these ${fmtInt(x.leads)} leads`} onClick={() => onPick(split.dim, x.key)}>
-                  <td className="max-w-[190px] truncate py-[3px] pr-2" title={x.key}>{x.key}</td>
-                  <td className="w-full py-[3px]"><div className="h-2 rounded-sm bg-accent/15"><div className="h-2 rounded-sm bg-accent" style={{ width: `${max ? Math.max(2, (x.leads / max) * 100) : 0}%` }} /></div></td>
-                  <td className="whitespace-nowrap py-[3px] pl-2 text-right tabular-nums font-medium">{fmtInt(x.leads)}</td>
-                  <td className="whitespace-nowrap py-[3px] pl-2 text-right tabular-nums text-ink-3">{total ? fmtPct((x.leads / total) * 100) : '–'}</td>
+                  <td className="max-w-[200px] truncate whitespace-nowrap py-1 pr-3" title={x.key}>{x.key}</td>
+                  <td className="w-full min-w-[4rem] py-1"><div className="h-2 rounded-sm bg-accent/15"><div className="h-2 rounded-sm bg-accent" style={{ width: `${max ? Math.max(2, (x.leads / max) * 100) : 0}%` }} /></div></td>
+                  <td className="whitespace-nowrap py-1 pl-3 text-right tabular-nums font-medium">{fmtInt(x.leads)}</td>
+                  <td className="whitespace-nowrap py-1 pl-2 text-right tabular-nums text-ink-3">{total ? fmtPct((x.leads / total) * 100) : '–'}</td>
                   {split.kind === 'pay' && <td className="whitespace-nowrap py-[3px] pl-2 text-right tabular-nums text-ink-3" title="revenue">{fmtINR(x.revenue)}</td>}
                 </tr>
               ))}
             </tbody>
           </table>
+          {more > 0 && (
+            <button type="button" className="mt-1.5 text-[11px] font-medium text-accent hover:underline" onClick={() => setAll(!all)}>
+              {all ? 'Show top 8' : `+ ${fmtInt(more)} more`}
+            </button>
+          )}
         </div>
       )}
     </div>

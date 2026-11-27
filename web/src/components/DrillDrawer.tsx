@@ -31,6 +31,9 @@ const METRIC_LABEL: Record<DrillMetric, string> = {
 };
 
 type Row = Record<string, unknown>;
+/** server sort keys of the Overview lead list; a column whose key differs from its sort key is mapped in SORT_ALIAS */
+const DEFAULT_SORTS: [string, string][] = [['touches_in_window', 'Touches (window)'], ['n_touches_all', 'Touches (all)'], ['last_touch_in_window', 'Last touch'], ['created_date', 'Created'], ['converted_at', 'First payment'], ['last_payment_date', 'Last payment'], ['revenue', 'Revenue'], ['lead_name', 'Lead'], ['lead_stage', 'Stage'], ['class_raw', 'Class'], ['lead_source', 'Lead source'], ['owner_name', 'Owner'], ['district', 'District']];
+const SORT_ALIAS: Record<string, string> = { lead_created_date: 'created_date', first_payment_date: 'converted_at' };
 interface Resp { page: number; limit: number; total: number; rows: Row[]; masked: boolean; columns: string[] }
 
 const yesNo = (v: unknown) => (v ? 'Yes' : 'No');
@@ -65,8 +68,6 @@ const COLS: Col<Row>[] = [
   { key: 'courses', header: 'Course / batch' },
   { key: 'owner_name', header: 'Owner' },
   { key: 'lm_reason', header: 'LM reason' },
-  { key: 'sf_is_converted', header: 'SF converted', render: yesNo },
-  { key: 'is_duplicate', header: 'Duplicate', render: yesNo },
   { key: 'email', header: 'Email' },
 ];
 
@@ -121,7 +122,6 @@ export const NEW_LEAD_COLS: Col<Row>[] = [
   { key: 'courses', header: 'Course / batch' },
   { key: 'owner_name', header: 'Owner' },
   { key: 'lm_reason', header: 'LM reason' },
-  { key: 'sf_is_converted', header: 'SF converted', render: yesNo },
 ];
 export const NEW_LEAD_SORTS: [string, string][] = [['created_date', 'Created'], ['n_touches_all', 'Touches (all)'], ['last_touch_any', 'Last touch'], ['converted_at', 'First payment'], ['last_payment_date', 'Last payment'], ['revenue', 'Revenue'], ['lead_name', 'Lead ID'], ['lead_stage', 'Stage'], ['class_raw', 'Class'], ['owner_name', 'Owner']];
 
@@ -152,6 +152,9 @@ export function DrillDrawer({ drill, onClose }: { drill: Drill; onClose: () => v
   const noun = drill.noun ?? 'leads';
   const d = r.data?.data;
   const pages = d ? Math.max(1, Math.ceil(d.total / d.limit)) : 1;
+  const sortOpts: [string, string][] = drill.sortOptions ?? DEFAULT_SORTS;
+  const sortIds = new Set(sortOpts.map(([id]) => id));
+  const sortLabel = (sortOpts.find(([id]) => id === sort.id)?.[1] ?? sort.id).toLowerCase();
   const dimLabel = dim ? (DIM_LABEL[dim] ?? EXTRA_LABEL[dim] ?? dim) : null;
   const canFilterPage = !!dim && value !== undefined && dim in DIM_LABEL;
 
@@ -192,21 +195,19 @@ export function DrillDrawer({ drill, onClose }: { drill: Drill; onClose: () => v
           {view === 'list' && d && (
             <div className={`h-full ${r.isFetching ? 'opacity-70' : ''}`}>
               <DataTable rows={d.rows} columns={cols} compact maxHeight="100%" rowKey={(x) => String(x.lead_id ?? x.user_id)} onRowClick={(x) => { if (x.lead_id) setLeadId(String(x.lead_id)); }}
-                initialSort={sort} />
+                serverSort={{ sort, onSort: (s) => { setSort(s); setPage(1); }, sortId: (k) => { const id = SORT_ALIAS[k] ?? k; return sortIds.has(id) ? id : null; } }} />
             </div>
           )}
         </div>
 
         {view === 'list' && <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-4 py-2 text-xs text-ink-2">
-          <div className="flex items-center gap-2">
-            <span>Sort</span>
-            <select className="input !py-0.5" value={sort.id} onChange={(e) => setSort({ id: e.target.value, desc: sort.desc })}>
-              {(drill.sortOptions ?? [['touches_in_window', 'Touches (window)'], ['n_touches_all', 'Touches (all)'], ['last_touch_in_window', 'Last touch'], ['created_date', 'Created'], ['converted_at', 'First payment'], ['last_payment_date', 'Last payment'], ['revenue', 'Revenue'], ['lead_name', 'Lead ID'], ['lead_stage', 'Stage'], ['class_raw', 'Class'], ['owner_name', 'Owner']]).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-            <button className="btn" onClick={() => setSort({ ...sort, desc: !sort.desc })}>{sort.desc ? '▼ desc' : '▲ asc'}</button>
-            <select className="input !py-0.5" value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}>{[25, 50, 100, 200].map((n) => <option key={n} value={n}>{n} / page</option>)}</select>
+          {/* 2026-11-27: search and sorting cover ALL the matching leads (the server sorts, then pages); click a column name to sort */}
+          <div className="tabular-nums">
+            {d ? <>Showing <b className="text-ink">{fmtInt(d.total ? (page - 1) * limit + 1 : 0)}–{fmtInt(Math.min(page * limit, d.total))}</b> of <b className="text-ink">{fmtInt(d.total)}</b> {noun}</> : '…'}
+            <span className="ml-2 text-ink-3">· sorted by {sortLabel} {sort.desc ? '▼' : '▲'} · click a column name to sort all of them</span>
           </div>
           <div className="flex items-center gap-1">
+            <select className="input !py-0.5" value={limit} onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}>{[50, 100, 200, 500].map((n) => <option key={n} value={n}>{n} per page</option>)}</select>
             <button className="btn" disabled={page <= 1} onClick={() => setPage(1)}>«</button>
             <button className="btn" disabled={page <= 1} onClick={() => setPage(page - 1)}>‹</button>
             <span className="px-2 tabular-nums">page {page} / {pages}</span>

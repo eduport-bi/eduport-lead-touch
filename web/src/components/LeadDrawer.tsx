@@ -11,19 +11,19 @@ export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () =>
   const d = q.data?.data;
   const l: Record<string, unknown> = d?.lead ?? {};
   const s = (k: string) => (l[k] == null ? '–' : String(l[k]));
-  const facts: [string, string][] = d ? [
-    ['Name', `${l.first_name ?? ''} ${l.last_name ?? ''}`.trim() || '–'], ['EPS ID', s('eps_id')],
-    ['Created', fmtDateTime(l.created_at as string)], ['Source', s('lead_source')], ['Stage', s('lead_stage')], ['Class', `${s('class_group')} (${s('class_raw')})`],
-    ['Owner', s('owner_name')], ['District / City', `${s('district')} / ${s('city')}`], ['Priority', s('priority')], ['Lead type', s('lead_type')],
-    ['Mobile', s('mobile')], ['Email', s('email')],
-    ['Converted', l.converted ? `yes · ${String(l.converted_at ?? '').slice(0, 10)} · ${s('days_to_convert')} days${l.pre_existing_customer ? ' · pre-existing customer' : ''}` : 'no'],
-    ['Revenue', fmtINRfull(l.revenue as number)], ['Touches', `${s('total_touches')} total · ${s('valid_touches')} before payment`],
-    ['SF flags', `Is_Converted__c=${s('sf_is_converted')} · Touch_Count__c=${s('sf_touch_count')} · duplicate=${s('is_duplicate')}`],
-    ['LM reason', s('lm_reason')], ['Best IC status', s('best_ic_status')],
+  // facts in four groups (2026-11-27: one 18-value grid was too crowded)
+  const yes = (v: unknown) => (v == null ? '–' : v === true || v === 'true' ? 'Yes' : v === false || v === 'false' ? 'No' : String(v));
+  const groups: { title: string; facts: [string, string][] }[] = d ? [
+    { title: 'Lead', facts: [['Name', `${l.first_name ?? ''} ${l.last_name ?? ''}`.trim() || '–'], ['EPS ID', s('eps_id')], ['Created', fmtDateTime(l.created_at as string)],
+      ['Stage', s('lead_stage')], ['Class', `${s('class_group')} (${s('class_raw')})`], ['Lead source', s('lead_source')], ['LM reason', s('lm_reason')], ['Best IC status', s('best_ic_status')]] },
+    { title: 'Contact', facts: [['Mobile', s('mobile')], ['Email', s('email')], ['District / City', `${s('district')} / ${s('city')}`]] },
+    { title: 'Sales', facts: [['Owner', s('owner_name')], ['Priority', s('priority')], ['Lead type', s('lead_type')]] },
+    { title: 'Conversion', facts: [['Converted', l.converted ? `Yes · ${String(l.converted_at ?? '').slice(0, 10)} · ${s('days_to_convert')} days${l.pre_existing_customer ? ' · pre-existing customer' : ''}` : 'No'],
+      ['Revenue', fmtINRfull(l.revenue as number)], ['Touches', `${s('total_touches')} total · ${s('valid_touches')} before payment`]] },
   ] : [];
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
-      <div className="flex h-full w-full max-w-3xl flex-col overflow-hidden border-l border-line bg-surface shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="flex h-full w-full max-w-4xl flex-col overflow-hidden border-l border-line bg-surface shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <div>
             <div className="text-sm font-semibold">{s('lead_name')} <span className="ml-2 text-xs font-normal text-ink-3">{leadId}</span></div>
@@ -31,27 +31,36 @@ export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () =>
           </div>
           <button className="btn" onClick={onClose}><Icon.Close /> Close</button>
         </div>
-        <div className="flex-1 space-y-4 overflow-auto p-4 text-xs">
+        <div className="flex-1 space-y-6 overflow-auto p-5 text-xs">
           {q.isLoading && <div className="space-y-2"><Skeleton /><Skeleton /><Skeleton className="h-40" /></div>}
           {q.error && <ErrorNote error={q.error} onRetry={q.refetch} />}
           {d && (
             <>
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-1 md:grid-cols-3">
-                {facts.map(([k, v]) => <div key={k}><dt className="text-[10px] uppercase tracking-wide text-ink-3">{k}</dt><dd className="truncate" title={v}>{v}</dd></div>)}
-              </dl>
+              <div className="grid gap-3 md:grid-cols-2">
+                {groups.map((g) => (
+                  <div key={g.title} className={`rounded-xl border border-line bg-surface-2 p-3 ${g.title === 'Lead' ? 'md:col-span-2' : ''}`}>
+                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-3">{g.title}</div>
+                    <dl className={`grid gap-x-6 gap-y-2.5 ${g.title === 'Lead' ? 'grid-cols-2 md:grid-cols-4' : 'grid-cols-2'}`}>
+                      {g.facts.map(([k, v]) => <div key={k} className="min-w-0"><dt className="text-[10px] uppercase tracking-wide text-ink-3">{k}</dt><dd className="mt-0.5 break-words text-[13px] text-ink">{v}</dd></div>)}
+                    </dl>
+                  </div>
+                ))}
+              </div>
 
               <Section title={`Touch timeline (${d.touches.length})`}>
                 <ol className="relative ml-2 border-l border-line pl-4">
                   {d.touches.map((t) => (
-                    <li key={String(t.touch_id)} className={`relative mb-2 ${t.is_pre_conversion ? '' : 'opacity-60'}`}>
+                    <li key={String(t.touch_id)} className={`relative mb-3.5 ${t.is_pre_conversion ? '' : 'opacity-60'}`}>
                       <span className={`absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full border-2 border-surface ${t.is_first_touch ? 'bg-[#1baf7a]' : t.is_last_touch ? 'bg-[#eb6834]' : 'bg-accent'}`} />
                       <div className="flex flex-wrap items-baseline gap-x-2">
                         <span className="font-medium">{fmtDateTime(t.touch_at as string)}</span>
                         <span className="chip">{String(t.touch_point)}</span>
-                        <span className="text-ink-2">{String(t.source)}{t.medium != null && t.medium !== '(blank)' ? ` · ${String(t.medium)}` : ''}{t.campaign != null && t.campaign !== '(blank)' ? ` · ${String(t.campaign)}` : ''}</span>
-                        {t.staff != null && <span className="text-ink-3">staff: {String(t.staff)}</span>}
                         {!t.is_pre_conversion && <span className="text-[#d03b3b]">after payment</span>}
                         {!!t.is_first_touch && <span className="text-[#1baf7a]">first</span>}{!!t.is_last_touch && <span className="text-[#eb6834]">last</span>}
+                      </div>
+                      <div className="mt-0.5 flex flex-wrap items-baseline gap-x-3 text-[11px]">
+                        <span className="text-ink-2">{String(t.source)}{t.medium != null && t.medium !== '(blank)' ? ` · ${String(t.medium)}` : ''}{t.campaign != null && t.campaign !== '(blank)' ? ` · ${String(t.campaign)}` : ''}</span>
+                        {t.staff != null && <span className="text-ink-3">staff: {String(t.staff)}</span>}
                         {t.gap_hours_from_prev != null && <span className="text-ink-3">+{fmt2(Number(t.gap_hours_from_prev))} h</span>}
                         {Number(t.credit_linear) > 0 && <span className="text-ink-3">credit L {fmt2(Number(t.credit_linear))} · P {fmt2(Number(t.credit_position))}</span>}
                       </div>
@@ -70,19 +79,22 @@ export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () =>
               </Section>
               <Section title={d.call_summary ? `Calls (${fmtInt(Number(d.call_summary.calls))} since May 2026)` : 'Calls'}>
                 {d.call_summary ? (
-                  <dl className="grid grid-cols-2 gap-x-4 gap-y-1 md:grid-cols-4">
-                    <div><dt className="text-[10px] uppercase tracking-wide text-ink-3">Last call</dt><dd>{fmtDateTime(d.call_summary.last_call_at as string)}</dd></div>
-                    <div><dt className="text-[10px] uppercase tracking-wide text-ink-3">Last reason</dt><dd>{(d.call_summary.last_reason as string) ?? '–'}</dd></div>
-                    <div><dt className="text-[10px] uppercase tracking-wide text-ink-3">Call status</dt><dd>{(d.call_summary.last_call_status as string) ?? '–'}</dd></div>
-                    <div><dt className="text-[10px] uppercase tracking-wide text-ink-3">Called by</dt><dd>{(d.call_summary.last_owner as string) ?? '–'}</dd></div>
-                    <div className="col-span-2 md:col-span-4"><dt className="text-[10px] uppercase tracking-wide text-ink-3">Executive's comment on the last call</dt><dd className="whitespace-pre-wrap rounded-lg bg-surface-2 px-2 py-1">{(d.call_summary.last_comment as string) || '–'}</dd></div>
-                    <div><dt className="text-[10px] uppercase tracking-wide text-ink-3">First call</dt><dd>{fmtDateTime(d.call_summary.first_call_at as string)}</dd></div>
-                  </dl>
+                  <div className="rounded-xl border border-line bg-surface-2 p-3">
+                    <dl className="grid grid-cols-2 gap-x-6 gap-y-3 md:grid-cols-3">
+                      <Fact k="Last call" v={fmtDateTime(d.call_summary.last_call_at as string)} />
+                      <Fact k="First call" v={fmtDateTime(d.call_summary.first_call_at as string)} />
+                      <Fact k="Called by" v={(d.call_summary.last_owner as string) ?? '–'} />
+                      <Fact k="Last reason" v={(d.call_summary.last_reason as string) ?? '–'} />
+                      <Fact k="Call status" v={(d.call_summary.last_call_status as string) ?? '–'} />
+                    </dl>
+                    <div className="mt-3"><dt className="text-[10px] uppercase tracking-wide text-ink-3">Executive's comment on the last call</dt>
+                      <dd className="mt-1 whitespace-pre-wrap rounded-lg border border-line bg-surface px-3 py-2 text-[13px] text-ink">{(d.call_summary.last_comment as string) || '–'}</dd></div>
+                  </div>
                 ) : <div className="text-ink-3">No call logged since May 2026</div>}
               </Section>
               {d.siblings.length > 0 && (
                 <Section title={`Other leads of the same person (${d.siblings.length})`}>
-                  <SimpleTable rows={d.siblings} cols={['lead_name', 'mobile', 'matched_on', 'created_date', 'lead_source', 'lead_stage', 'is_duplicate', 'converted']} />
+                  <SimpleTable rows={d.siblings} cols={['lead_name', 'mobile', 'matched_on', 'created_date', 'lead_source', 'lead_stage', 'converted']} />
                 </Section>
               )}
             </>
@@ -93,16 +105,19 @@ export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () =>
   );
 }
 
+function Fact({ k, v }: { k: string; v: string }) {
+  return <div className="min-w-0"><dt className="text-[10px] uppercase tracking-wide text-ink-3">{k}</dt><dd className="mt-0.5 break-words text-[13px] text-ink">{v}</dd></div>;
+}
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return <section><h4 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-3">{title}</h4>{children}</section>;
+  return <section><h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-3">{title}</h4>{children}</section>;
 }
 function SimpleTable({ rows, cols }: { rows: Record<string, unknown>[]; cols: string[] }) {
   if (!rows.length) return <div className="text-ink-3">None</div>;
   return (
-    <div className="overflow-auto rounded border border-line">
-      <table className="w-full"><thead><tr>{cols.map((c) => <th key={c} className="th !static">{c}</th>)}</tr></thead>
-        <tbody>{rows.map((r, i) => <tr key={i}>{cols.map((c) => <td key={c} className="td !py-1 text-xs">{fmtCell(r[c])}</td>)}</tr>)}</tbody></table>
+    <div className="overflow-auto rounded-lg border border-line">
+      <table className="w-full"><thead><tr>{cols.map((c) => <th key={c} className="th !static whitespace-nowrap">{c.replace(/_/g, ' ')}</th>)}</tr></thead>
+        <tbody>{rows.map((r, i) => <tr key={i}>{cols.map((c) => <td key={c} className={`td !py-1.5 text-xs ${/name|course|batch/.test(c) ? 'min-w-[14rem]' : 'whitespace-nowrap'}`}>{fmtCell(r[c])}</td>)}</tr>)}</tbody></table>
     </div>
   );
 }
-const fmtCell = (v: unknown) => (v == null ? '–' : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : typeof v === 'number' ? fmtInt(v) : /^\d{4}-\d{2}-\d{2}T/.test(String(v)) ? fmtDateTime(String(v)) : String(v));
+const fmtCell = (v: unknown) => (v == null ? '–' : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : typeof v === 'number' ? fmtInt(v) : /^\d{4}-\d{2}-\d{2}[T ]\d{2}:/.test(String(v)) ? fmtDateTime(String(v).replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00')) : String(v));

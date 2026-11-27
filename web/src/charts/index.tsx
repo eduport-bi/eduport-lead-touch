@@ -63,7 +63,15 @@ export function TrendChart({ data, compare }: { data: TrendDatum[]; compare?: bo
 
 // ---------------------------------------------------------------- horizontal bars (click = cross-filter)
 export interface BarDatum { key: string; value: number; secondary?: number | null; label?: string; selected?: boolean; extra?: Record<string, unknown> }
-export function HBars({ data, format = fmtInt, secondaryLabel, secondaryFormat = fmtPct, onClick, color, maxLabel = 22, valueLabel = 'Value', colorful = true }: {
+/** the drawn width of a 10 px label (canvas measure; recharts wraps a tick that is wider than the axis) */
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+function textWidth(t: string): number {
+  if (measureCtx === undefined) { try { measureCtx = document.createElement('canvas').getContext('2d'); } catch { measureCtx = null; } }
+  if (!measureCtx) return t.length * 6.6;
+  measureCtx.font = '10px Inter, ui-sans-serif, system-ui, sans-serif';
+  return measureCtx.measureText(t).width;
+}
+export function HBars({ data, format = fmtInt, secondaryLabel, secondaryFormat = fmtPct, onClick, color, maxLabel = 44, valueLabel = 'Value', colorful = true }: {
   data: BarDatum[]; format?: (v: number) => string; secondaryLabel?: string; secondaryFormat?: (v: number) => string; onClick?: (key: string) => void; color?: string; maxLabel?: number; valueLabel?: string; colorful?: boolean;
 }) {
   const { series, ramp, ink } = useTheme();
@@ -72,13 +80,18 @@ export function HBars({ data, format = fmtInt, secondaryLabel, secondaryFormat =
   const anySel = data.some((d) => d.selected);
   // fills its card (2026-11-26): the bars spread over the whole height; a long list keeps 22 px per bar and scrolls
   const h = Math.max(110, data.length * 22);
+  // 2026-11-27: the label column fits the longest label (≈6 px a character at 10 px), so labels are never wrapped or cut
+  const longest = Math.min(maxLabel, Math.max(4, ...data.map((d) => String(d.key ?? '').length)));
+  const labelW = Math.min(280, Math.max(70, Math.ceil(Math.max(longest * 5.5, ...data.map((d) => textWidth(String(d.key ?? '').slice(0, maxLabel))))) + 16));
   return (
     <div className="h-full overflow-y-auto">
       <ResponsiveContainer width="100%" height="100%" minHeight={h}>
         <BarChart data={data} layout="vertical" margin={{ top: 2, right: 56, left: 8, bottom: 2 }} barCategoryGap={3}>
           <CartesianGrid horizontal={false} stroke={ink.grid} />
           <XAxis type="number" {...axis} tickFormatter={fmtCompact} hide />
-          <YAxis type="category" dataKey="key" {...axis} width={128} interval={0} tick={{ fontSize: 10 }} tickFormatter={(v: string) => (v.length > maxLabel ? `${v.slice(0, maxLabel - 1)}…` : v)} />
+          <YAxis type="category" dataKey="key" {...axis} width={labelW} interval={0}
+            // one line per label, never wrapped (the axis is sized to the longest label above)
+            tick={({ x, y, payload }: { x: number; y: number; payload: { value: string } }) => { const v = String(payload.value ?? ''); return <text x={x - 4} y={y} dy={3.5} textAnchor="end" fontSize={10} fill={ink.secondary}><title>{v}</title>{v.length > maxLabel ? `${v.slice(0, maxLabel - 1)}…` : v}</text>; }} />
           <Tooltip cursor={{ fill: ink.grid, opacity: 0.4 }} content={<Tip rows={(d) => [[valueLabel, format(d.value as number)], ...(secondaryLabel && d.secondary != null ? ([[secondaryLabel, secondaryFormat(d.secondary as number)]] as [string, string][]) : []), ...Object.entries((d.extra as Record<string, unknown>) ?? {}).map(([k, v]) => [k, String(v)] as [string, string])]} />} />
           <Bar dataKey="value" radius={[6, 6, 6, 6]} maxBarSize={18} isAnimationActive={false} onClick={(d) => onClick?.((d as unknown as BarDatum).key)} cursor={onClick ? 'pointer' : undefined}>
             {data.map((d, i) => <Cell key={d.key} fill={colorful ? shades[i] : c} fillOpacity={anySel && !d.selected ? 0.35 : 1} />)}

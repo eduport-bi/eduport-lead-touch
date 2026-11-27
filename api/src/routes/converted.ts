@@ -356,7 +356,7 @@ function listQuery(sql: Sql, f: Filters, p: Period, q: Record<string, string>, p
 converted.get('/converted/users', (c) =>
   handle(c, async ({ sql, f, periods, q: q0, role }) => {
     const q = withGrade(f, q0);
-    const limit = intParam(q, 'limit', 50, 1, 200);
+    const limit = intParam(q, 'limit', 50, 1, 500);   // up to 500 a page (2026-11-27)
     const page = intParam(q, 'page', 1, 1, 100000);
     const rows = await listQuery(sql, f, periods.current, q, { limit, offset: (page - 1) * limit });
     const total = rows.length ? (rows[0].total_rows as number) : 0;

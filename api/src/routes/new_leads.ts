@@ -93,6 +93,31 @@ export function newLeadWhere(sql: Sql, f: Filters, p: Period | null, opts: { val
   return andAll(sql, c);
 }
 
+/** Yet to connect (Overview, 2026-11-27): the leads of Total leads (newLeadWhere: created in the window; touch-date basis: created in it OR
+ *  touched in it) with their current LM stage and yet = nobody contacted the lead since whatever brought it into the window: its creation
+ *  day, or on the touch-date basis its LAST touch in the window when that is later than its creation (user, 2026-11-27). Contact = a call Task, a Lead Stage
+ *  change (New / Converted excepted: Converted is set by the payment) or an Interested Course status change (Converted leads excepted).
+ *  Only leads whose start day is at least `days` old count. Set-based: the first touches of the window are read once (one grouped scan of
+ *  the touch-date index), not per lead. Rows: lead_id, stage, yet. */
+export function yetRows(sql: Sql, f: Filters, p: Period, days: number): Frag {
+  const touch = f.basis !== 'created';
+  const anchor = touch
+    ? sql`GREATEST(CASE WHEN l.created_date BETWEEN ${p.from} AND ${p.to} THEN l.created_date END, ft.last_touch)`
+    : sql`l.created_date`;
+  return sql`
+    SELECT x.lead_id, x.stage,
+           (x.anchor <= (now() AT TIME ZONE 'Asia/Kolkata')::date - ${days}::int
+            AND NOT EXISTS (SELECT 1 FROM unnest(lc.call_days) AS cd WHERE cd >= x.anchor)
+            AND (x.stage IN ('New', 'Converted') OR NOT COALESCE(dd.lm_since >= (x.anchor::timestamp AT TIME ZONE 'Asia/Kolkata'), false))
+            AND (x.stage = 'Converted' OR NOT EXISTS (SELECT 1 FROM analytics.mv_ic_decision i WHERE i.lead_id = x.lead_id AND i.status <> 'New' AND i.ic_since >= (x.anchor::timestamp AT TIME ZONE 'Asia/Kolkata')))) AS yet
+    FROM (SELECT l.lead_id, l.lead_stage AS stage, ${anchor} AS anchor
+          FROM analytics.mv_lead_lite l
+          ${touch ? sql`LEFT JOIN (SELECT t.lead_id, max(t.touch_date) AS last_touch FROM analytics.mv_touch_flat t WHERE t.touch_date BETWEEN ${p.from} AND ${p.to} GROUP BY 1) ft ON ft.lead_id = l.lead_id` : sql``}
+          WHERE ${newLeadWhere(sql, f, p, touch ? { scope: 'union' } : {})}) x
+    LEFT JOIN salesforce.lead_calls lc ON lc.lead_id = x.lead_id
+    LEFT JOIN analytics.mv_lead_decision dd ON dd.lead_id = x.lead_id`;
+}
+
 /** a value picked on the summary (dim=...&value=...) at lead grain */
 function dimCond(sql: Sql, q: Record<string, string>, f?: Filters, p?: Period | null): Frag {
   const dim = q.dim; const value = q.value;
@@ -113,6 +138,16 @@ function dimCond(sql: Sql, q: Record<string, string>, f?: Filters, p?: Period | 
     }
     if (value === 'before') return sql`(${noTouch} AND ${fp} < ${winFrom})`;
     return pp ? sql`(${noTouch} AND ${fp} >= l.created_date AND ${fp} BETWEEN ${pp.from} AND ${pp.to})` : sql`(${noTouch} AND ${fp} >= l.created_date AND ${fp} >= ${winFrom})`;
+  }
+  if (dim === 'yet_connect') {
+    // value = "<days>" or "<days>|<LM stage>" (the Overview Yet to connect card and its bars)
+    if (!f || !p) return sql`false`;
+    const [d, stage] = value.split('|');
+    const days = Math.max(0, Math.min(365, Number.parseInt(d ?? '', 10) || 0));
+    // '(revised)' = every stage other than New and Converted (the card's "Revised to New" bar)
+    const st2 = stage === undefined ? sql`true` : stage === '(revised)' ? sql`y.stage IS DISTINCT FROM 'New' AND y.stage IS DISTINCT FROM 'Converted'`
+      : stage === '(blank)' ? sql`y.stage IS NULL` : sql`y.stage = ${stage}`;
+    return sql`l.lead_id IN (SELECT y.lead_id FROM (${yetRows(sql, f, p, days)}) y WHERE y.yet AND ${st2})`;
   }
   if (dim === 'touched') {
     const ex = sql`EXISTS (SELECT 1 FROM analytics.mv_touch_flat t WHERE t.lead_id = l.lead_id)`;
@@ -221,7 +256,7 @@ function leadQuery(sql: Sql, f: Filters, p: Period, q: Record<string, string>, p
 
 newLeads.get('/overview/new_leads', (c) =>
   handle(c, async ({ sql, f, periods, q, role }) => {
-    const limit = intParam(q, 'limit', 50, 1, 200);
+    const limit = intParam(q, 'limit', 50, 1, 500);   // up to 500 a page (2026-11-27)
     const page = intParam(q, 'page', 1, 1, 100000);
     const rows = await leadQuery(sql, f, periods.current, q, { limit, offset: (page - 1) * limit });
     const total = rows.length ? (rows[0].total_rows as number) : 0;

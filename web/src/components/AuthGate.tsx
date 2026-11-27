@@ -40,7 +40,7 @@ function Center({ children }: { children: ReactNode }) {
       <div className="w-full max-w-sm">
         <div className="mb-5 flex items-center justify-center gap-2.5">
           <img src="/eduport-logo.png" alt="Eduport" className="h-11 w-11 rounded-full border border-line bg-white object-cover" />
-          <div><div className="text-base font-semibold tracking-tight text-accent">eduport</div><div className="-mt-0.5 text-[11px] font-medium text-ink-3">Lead Touch analytics</div></div>
+          <div><div className="whitespace-nowrap text-xl font-semibold leading-tight tracking-tight text-accent">Eduport</div><div className="whitespace-nowrap text-[13px] font-medium leading-tight tracking-tight text-ink-3">Lead Touch Analytics</div></div>
         </div>
         <div className="card">{children}</div>
       </div>

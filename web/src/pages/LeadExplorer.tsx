@@ -46,7 +46,7 @@ export default function LeadExplorer() {
             { key: 'total_touches', header: 'Touches' }, { key: 'valid_touches', header: 'Pre-pay touches' }, { key: 'first_touch_point', header: 'First touch' }, { key: 'last_touch_point', header: 'Last touch' },
             { key: 'response_hours', header: 'Response (h)' }, { key: 'converted', header: 'Conv.', render: (v) => (v ? '✓' : '') }, { key: 'converted_at', header: 'Converted at' }, { key: 'days_to_convert', header: 'Days' },
             { key: 'revenue', header: 'Revenue', render: (v) => fmtINRfull(v as number) }, { key: 'priority', header: 'Priority' }, { key: 'best_ic_status', header: 'IC status' },
-            { key: 'is_duplicate', header: 'Dup' }, { key: 'sf_is_converted', header: 'SF conv flag' },
+            
           ]} />
       )}
       <div className="text-[11px] text-ink-3">Rows highlighted amber are pre-existing customers (payment before lead creation). Conversion % of this view: {d && d.total ? fmtPct(((d.rows.filter((r) => r.converted).length) / d.rows.length) * 100) : '–'} (this page only). Click a row for the full touch timeline, ICs, payments and calls. This page lists every lead in the database regardless of the date range at the top; the Class / Touch point / Lead source / Campaign pickers, Add filter and the search box narrow it down.</div>

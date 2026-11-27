@@ -3,7 +3,7 @@ import type { Sql } from 'postgres';
 import type { AppEnv, Role } from '../env';
 import { handle, intParam, maskEmail, maskName, maskPhone, csvStream } from '../http';
 import { parseFilters, resolvePeriods, icCourseIn, type Filters, type Frag, type Period } from '../filters';
-import { flatWhere, FLAT_COLS, convCond, convAfterCond, convBeforeCond, tatBucket, activityBucket, activityDays } from './overview';
+import { flatWhere, FLAT_COLS, convCond, convAfterCond, convBeforeCond, tatBucket, activityBucket, activityDays, appOnlyQuick } from './overview';
 import { paymentPeriod } from '../filters';
 
 /**
@@ -59,11 +59,11 @@ function dimCond(sql: Sql, q: Record<string, string>, f?: Filters, p?: Period | 
   }
   if (dim === 'ic_course') return icCourseIn(sql, 't', [value]);
   if (dim === 'tat_activity') {
-    // first touch -> first activity band (Overview Turnaround card; activity = first Task on the LM / its ICs on or after that touch, any later
+    // last touch -> first activity band (2026-11-27, was first touch) (Overview Turnaround card; activity = first Task on the LM / its ICs on or after that touch, any later
     // date), evaluated once per lead of the selection
     const w = f ? flatWhere(sql, f, p ?? null) : sql`true`;
     return sql`t.lead_id IN (
-      SELECT x.lead_id FROM (SELECT t.lead_id, min(t.touch_date) AS first_touch FROM analytics.mv_touch_flat t WHERE ${w} GROUP BY t.lead_id) x
+      SELECT x.lead_id FROM (SELECT t.lead_id, max(t.touch_date) AS first_touch FROM analytics.mv_touch_flat t WHERE ${w} GROUP BY t.lead_id) x
       LEFT JOIN salesforce.lead_calls lc ON lc.lead_id = x.lead_id
       WHERE ${activityBucket(sql, activityDays(sql, sql`x.first_touch`))} = ${value})`;
   }
@@ -113,13 +113,13 @@ function metricHaving(sql: Sql, metric: Metric, p: Period, f?: Filters, q: Recor
         AND (SELECT x.last_touch_at FROM analytics.mv_lead_last_touch x WHERE x.lead_id = t.lead_id) < now() - make_interval(days => ${days})`;
     }
     case 'converted': return sql`bool_or(${conv})`;
-    case 'first_touch': return sql`bool_or(t.tab_is_first_touch AND ${conv})`;
-    case 'last_touch': return sql`bool_or(t.tab_is_last_touch AND ${conv})`;
+    case 'first_touch': return sql`bool_or(t.tab_is_first_touch AND ${conv} AND NOT ${appOnlyQuick(sql)})`;
+    case 'last_touch': return sql`bool_or(t.tab_is_last_touch AND ${conv} AND NOT ${appOnlyQuick(sql)})`;
     // Total converted: first valid payment on/after a touch AND not before the window start (same rule as the Overview KPI)
     // (purchased class: the date of the payment for the picked class, see overview.ts convAfterCond / convBeforeCond)
     case 'converted_first': return f ? sql`bool_or(${convAfterCond(sql, f, paymentPeriod(f)?.from ?? p.from)})` : sql`bool_or(t.converted AND t.is_pre_conversion AND t.converted_at >= ${p.from})`;
     // already a customer when the window started: first valid payment before the window start (payment window when it is on)
-    case 'converted_before': return f ? sql`bool_or(${convBeforeCond(sql, f, paymentPeriod(f)?.from ?? p.from)})` : sql`bool_or(t.converted AND t.converted_at < ${p.from})`;
+    case 'converted_before': return f ? sql`bool_or(${convBeforeCond(sql, f, paymentPeriod(f))})` : sql`bool_or(t.converted AND t.converted_at < t.touch_date)`;
     case 'sf_converted': return sql`bool_or(t.lead_sf_is_converted)`;
     case 'stage_conv_unpaid': return sql`max(t.lead_stage) = 'Converted' AND NOT bool_or(t.converted)`;
     case 'stage_react': return sql`max(t.lead_stage) IN ('Not Willing Now', 'Disqualified', 'Not Connected', 'P2 Completed')
@@ -131,12 +131,15 @@ function metricHaving(sql: Sql, metric: Metric, p: Period, f?: Filters, q: Recor
     case 'revised_new': {
       const scope = q.scope === 'new' ? sql`max(t.lead_stage) = 'New'` : q.scope === 'converted' ? sql`max(t.lead_stage) = 'Converted'`
         : q.scope === 'revised' ? sql`max(t.lead_stage) IS DISTINCT FROM 'New' AND max(t.lead_stage) IS DISTINCT FROM 'Converted'` : sql`true`;
+      const yetDays = Math.max(0, Math.min(365, Number.parseInt(q.yet_days ?? '5', 10) || 0));
       return sql`${scope}
+        AND min(t.touch_date) <= (now() AT TIME ZONE 'Asia/Kolkata')::date - ${yetDays}::int
         AND NOT EXISTS (SELECT 1 FROM salesforce.lead_calls lc, unnest(lc.call_days) AS d WHERE lc.lead_id = t.lead_id AND d >= min(t.touch_date))
         AND (max(t.lead_stage) IN ('New', 'Converted') OR NOT COALESCE((SELECT d.lm_since FROM analytics.mv_lead_decision d WHERE d.lead_id = t.lead_id) >= (min(t.touch_date)::timestamp AT TIME ZONE 'Asia/Kolkata'), false))
         AND (max(t.lead_stage) = 'Converted' OR NOT EXISTS (SELECT 1 FROM analytics.mv_ic_decision i WHERE i.lead_id = t.lead_id AND i.status <> 'New' AND i.ic_since >= (min(t.touch_date)::timestamp AT TIME ZONE 'Asia/Kolkata')))`;
     }
-    case 'avg_alltime': case 'avg_window': return sql`bool_or(t.converted)`;
+    // the two average-touches tiles cover the touched leads of Total converted (2026-11-27)
+    case 'avg_alltime': case 'avg_window': return f ? sql`bool_or(${convAfterCond(sql, f, paymentPeriod(f)?.from ?? p.from)})` : sql`bool_or(t.converted AND t.is_pre_conversion AND t.converted_at >= ${p.from})`;
     case 'fee_paid': return sql`true`;   // the payment condition is part of the row selection (feeLeads)
     default: return sql`true`;
   }
@@ -255,7 +258,7 @@ function leadQuery(sql: Sql, f: Filters, periods: { current: Period }, q: Record
 
 overviewLeads.get('/overview/leads', (c) =>
   handle(c, async ({ sql, f, periods, q, role }) => {
-    const limit = intParam(q, 'limit', 50, 1, 200);
+    const limit = intParam(q, 'limit', 50, 1, 500);   // up to 500 a page (2026-11-27)
     const page = intParam(q, 'page', 1, 1, 100000);
     const rows = await leadQuery(sql, f, periods, q, { limit, offset: (page - 1) * limit });
     const total = rows.length ? (rows[0].total_rows as number) : 0;

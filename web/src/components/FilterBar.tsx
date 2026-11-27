@@ -211,6 +211,12 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
         </div>
       )}
 
+      {/* touch-date basis (user, 2026-11-27): say what Total leads holds, or "more leads than touches" looks wrong */}
+      {mode !== 'payment' && f.basis !== 'created' && (
+        <div className="mt-1.5 px-1 text-[11px] text-ink-3">
+          Touch date basis: leads = leads created in these dates + older leads touched in them. Leads created here with no touch yet are included, so leads can be more than touches.
+        </div>
+      )}
       {openDim && (
         <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/30 p-4 pt-24" onClick={() => setOpenDim(null)}>
           <div className="w-[420px] max-w-full rounded-2xl border border-line bg-surface p-3 shadow-pop" onClick={(e) => e.stopPropagation()}>

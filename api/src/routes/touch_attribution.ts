@@ -3,7 +3,7 @@ import type { Sql } from 'postgres';
 import type { AppEnv } from '../env';
 import { handle, pct } from '../http';
 import type { Frag } from '../filters';
-import { flatWhere, convCond } from './overview';
+import { flatWhere, convCond, appQuickTouch, appOnlyQuick } from './overview';
 
 /**
  * GET /api/touch-attribution?mode=first|last  - the Tableau "Lead Touch - First Touch" / "Lead Touch - Last Touch" dashboards.
@@ -23,7 +23,8 @@ export interface AttrRow { key: string; touches: number; leads: number; converte
 async function byDim(sql: Sql, w: Frag, col: string, flag: Frag, conv: Frag, limit = 2000): Promise<AttrRow[]> {
   const rows = await sql<{ key: string; touches: number; leads: number; converted: number; attributed: number }[]>`
     SELECT COALESCE(t.${sql(col)}::text, '(null)') AS key, count(*)::int AS touches, count(DISTINCT t.lead_id)::int AS leads,
-           count(DISTINCT t.lead_id) FILTER (WHERE ${conv})::int AS converted,
+           -- an Eduport App touch less than 2 h before the payment does not make the lead converted under its values (2026-11-27)
+           count(DISTINCT t.lead_id) FILTER (WHERE ${conv} AND NOT ${appQuickTouch(sql)})::int AS converted,
            count(DISTINCT t.lead_id) FILTER (WHERE ${flag})::int AS attributed
     FROM analytics.mv_touch_flat t WHERE ${w} GROUP BY 1 ORDER BY attributed DESC, leads DESC LIMIT ${limit}`;
   const totalAttr = rows.reduce((s, r) => s + r.attributed, 0);
@@ -36,7 +37,8 @@ touchAttribution.get('/touch-attribution', (c) =>
     const w = flatWhere(sql, f, periods.current);
     const wx = (skip: string) => flatWhere(sql, f, periods.current, skip);   // a card never filters itself
     const conv = convCond(sql, f);
-    const flag = mode === 'first' ? sql`t.tab_is_first_touch AND ${conv}` : sql`t.tab_is_last_touch AND ${conv}`;
+    // an only-touch app install less than 30 min before the payment gets no credit (appOnlyQuick)
+    const flag = mode === 'first' ? sql`t.tab_is_first_touch AND ${conv} AND NOT ${appOnlyQuick(sql)}` : sql`t.tab_is_last_touch AND ${conv} AND NOT ${appOnlyQuick(sql)}`;
     const [[k], touchPoint, classRaw, source, medium, campaign, daily] = await Promise.all([
       sql<{ touches: number; leads: number; converted: number; attributed: number; attributed_touches: number }[]>`
         SELECT count(*)::int AS touches, count(DISTINCT t.lead_id)::int AS leads,
