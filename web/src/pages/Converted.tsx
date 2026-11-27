@@ -51,9 +51,9 @@ type Pick = { selected: string[]; toggle: (key: string) => void; set: (keys: str
 /** expand: one row of the table gets a "+" that opens `rows` under it (same columns); clicking a sub-row calls onPick with its key */
 type ConvCardOpts = { filterDim?: ListDim; pick?: Pick; asTable?: boolean; height?: number; limit?: number; help?: string; cols?: Col<Dim>[]; expand?: { key: string; rows: Dim[]; onPick: (key: string) => void } };
 
-function ConvCard({ title, rows, tone, opts, cols, loading, error, onRetry, help, selected, onRow, onApply }: {
+function ConvCard({ title, rows, tone, opts, cols, loading, error, onRetry, help, selected, onRow, onApply, control }: {
   title: string; rows: Dim[] | undefined; tone: string; opts: ConvCardOpts; cols: Col<Dim>[]; loading: boolean; error: unknown; onRetry: () => void; help: string;
-  selected: string[]; onRow: (key: string) => void; onApply?: (keys: string[]) => void;
+  selected: string[]; onRow: (key: string) => void; onApply?: (keys: string[]) => void; control?: ReactNode;
 }) {
   const [search, setSearch] = useState('');
   const s = search.trim().toLowerCase();
@@ -63,7 +63,7 @@ function ConvCard({ title, rows, tone, opts, cols, loading, error, onRetry, help
   return (
     <ChartCard title={title} tone={tone} subtitle={rows ? `${fmtInt(filtered.reduce((x, r) => x + r.users, 0))} users${s ? ` in ${filtered.length} matching rows` : ''} · ${opts.filterDim || opts.pick ? `click rows to filter every card (multi-select)${selected.length ? ` · ${selected.length} selected` : ''}` : 'click a row for the users'}` : undefined}
       loading={loading} error={error} onRetry={onRetry} rows={filtered} columns={cols} height={opts.height ?? 280} help={help}
-      actions={<CardSearch value={search} onChange={setSearch} count={filtered.length} onApply={onApply ? () => onApply(filtered.map((r) => r.key)) : undefined} />}>
+      actions={<div className="flex items-center gap-2">{control}<CardSearch value={search} onChange={setSearch} count={filtered.length} onApply={onApply ? () => onApply(filtered.map((r) => r.key)) : undefined} /></div>}>
       {opts.asTable
         ? <DataTable rows={filtered} compact maxHeight="100%" initialSort={{ id: 'users', desc: true }} onRowClick={(r) => onRow(r.key)} columns={cols} highlight={(r) => selected.includes(r.key)}
             subRows={opts.expand ? (r) => (r.key === opts.expand!.key && opts.expand!.rows.length ? opts.expand!.rows : undefined) : undefined}
@@ -99,6 +99,7 @@ const RULE_TEXT: Record<Rule, string> = {
 };
 
 export default function Converted() {
+  const [touchMode, setTouchMode] = useState<Record<string, 'last' | 'first'>>({});
   const { f, params, toggleValue, setList } = useFilters();
   // (the Purchased grade picker was removed 2026-11-24: the filter bar's Class filter on Purchased class covers it; the grade card drills instead)
   // purchased course picked on the course table (multi-select)
@@ -128,19 +129,31 @@ export default function Converted() {
   const classCols = [...new Set(mix.map((r) => r.bought_class))].sort(byClass);
 
   const dimCols: Col<Dim>[] = [
-    { key: 'key', header: '' }, { key: 'users', header: 'Converted (users)', bar: true }, { key: 'share_pct', header: 'Share', render: (v) => fmtPct(v as number) },
+    { key: 'key', header: '', render: (v) => <span className="block min-w-[8rem] max-w-[14rem] whitespace-normal leading-snug [overflow-wrap:anywhere]">{String(v ?? '')}</span> }, { key: 'users', header: 'Converted (users)', bar: true }, { key: 'share_pct', header: 'Share', render: (v) => fmtPct(v as number) },
     { key: 'new_users', header: 'New customers' }, { key: 'touches', header: 'Touches before payment' }, { key: 'revenue', header: 'Revenue', render: (v) => fmtINR(v as number) },
   ];
   const payCols: Col<Dim>[] = [
-    { key: 'key', header: '' }, { key: 'users', header: 'Converted (users)', bar: true }, { key: 'touches', header: 'Payments' }, { key: 'revenue', header: 'Revenue (window)', render: (v) => fmtINR(v as number) },
+    { key: 'key', header: '', render: (v) => <span className="block min-w-[8rem] max-w-[14rem] whitespace-normal leading-snug [overflow-wrap:anywhere]">{String(v ?? '')}</span> }, { key: 'users', header: 'Converted (users)', bar: true }, { key: 'touches', header: 'Payments' }, { key: 'revenue', header: 'Revenue (window)', render: (v) => fmtINR(v as number) },
   ];
 
-  const card = (title: string, rows: Dim[] | undefined, drillDim: string, tone: string, opts: ConvCardOpts = {}) => (
-    <ConvCard key={title} title={title} rows={rows} tone={tone} opts={opts} cols={opts.cols ?? dimCols} loading={q.isLoading} error={q.error} onRetry={q.refetch}
+  const card = (title: string, rows: Dim[] | undefined, drillDim: string, tone: string, opts: ConvCardOpts = {}, control?: ReactNode, cardKey?: string) => (
+    <ConvCard key={cardKey ?? title} control={control} title={title} rows={rows} tone={tone} opts={opts} cols={opts.cols ?? dimCols} loading={q.isLoading} error={q.error} onRetry={q.refetch}
       help={opts.help ?? def.credit} selected={opts.pick ? opts.pick.selected : opts.filterDim ? (f.lists[opts.filterDim] ?? []) : []}
       onRow={(key) => (opts.pick ? opts.pick.toggle(key) : opts.filterDim ? toggleValue(opts.filterDim, key) : open(`${title} · ${key}`, drillDim, key))}
       onApply={opts.pick ? opts.pick.set : opts.filterDim ? (keys) => setList(opts.filterDim!, keys) : undefined} />
   );
+
+  // first / last touch pairs: one card each with a Last touch / First touch switch (user, 2026-11-27); Last touch is the default
+  const pair = (name: string, tone: string, last: { rows: Dim[] | undefined; drill: string; opts?: ConvCardOpts }, first: { rows: Dim[] | undefined; drill: string; opts?: ConvCardOpts }) => {
+    const m = touchMode[name] ?? 'last';
+    const sw = <Segmented size="xs" value={m} onChange={(v) => setTouchMode((o) => ({ ...o, [name]: v }))} options={[
+      { value: 'last', label: 'Last touch', title: 'credited to the last touch before the payment' },
+      { value: 'first', label: 'First touch', title: 'credited to the first touch before the payment' },
+    ]} />;
+    return m === 'last'
+      ? card(`${name} (last touch)`, last.rows, last.drill, tone, last.opts ?? {}, sw, name)
+      : card(`${name} (first touch)`, first.rows, first.drill, tone, { help: def.first_credit, ...(first.opts ?? {}) }, sw, name);
+  };
 
   return (
     <div className="space-y-4">
@@ -177,24 +190,23 @@ export default function Converted() {
           onClick={(r, c) => { if (mixMap.get(`${r}||${c}`)) open(`Lead ${r} · bought ${c}`, 'class_mix', `${r}||${c}`, `users whose Salesforce lead says ${r} and who bought a ${c} course in the window · click a row for the lead record`); }} />
       </ChartCard>
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      {/* row of three (user, 2026-11-27): lead stage, touch point, purchased grade; then pairs, Turnaround second in the last row */}
+      <div className="grid gap-4 xl:grid-cols-3">
         <ChartCard title="Lead stage distribution" tone="tone-brand" subtitle="converted users by lead stage · click a slice to filter" loading={q.isLoading} error={q.error} rows={d?.by_stage ?? []} columns={dimCols} height={260} help={def.stage}>
           <Donut data={(d?.by_stage ?? []).map((s) => ({ key: s.key === '(null)' ? 'No Salesforce lead' : s.key, value: s.users, selected: (f.lists.lead_stage ?? []).includes(s.key) }))} valueLabel="Converted (users)" centerLabel="users" onClick={(key) => toggleValue('lead_stage', key === 'No Salesforce lead' ? '(null)' : key)} />
         </ChartCard>
-        {card('Touch point analysis (last touch)', d?.by_last_touch_point, 'last_touch_point', 'tone-teal', { filterDim: 'touch_point', height: 260 })}
-        {card('Touch point analysis (first touch)', d?.by_first_touch_point, 'first_touch_point', 'tone-teal', { height: 260, help: def.first_credit })}
-        {card('Class wise conversion (purchased course)', d?.by_course, 'course', 'tone-violet', { asTable: true, cols: payCols, help: def.course, pick: { selected: courses, toggle: toggleIn(courses, setCourses), set: setCourses } })}
+        {pair('Touch point analysis', 'tone-teal', { rows: d?.by_last_touch_point, drill: 'last_touch_point', opts: { filterDim: 'touch_point', height: 260 } }, { rows: d?.by_first_touch_point, drill: 'first_touch_point', opts: { height: 260 } })}
         {card('Purchased grade', d?.by_grade, 'grade', 'tone-amber', { cols: payCols, help: def.grade, height: 280, filterDim: 'purchased_grade' })}
-        {card('Touch source distribution (last touch)', d?.by_last_source, 'last_touch_source', 'tone-orange', { filterDim: 'source', asTable: true,
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        {card('Class wise conversion (purchased course)', d?.by_course, 'course', 'tone-violet', { asTable: true, cols: payCols, help: def.course, pick: { selected: courses, toggle: toggleIn(courses, setCourses), set: setCourses } })}
+        {pair('Touch source distribution', 'tone-orange', { rows: d?.by_last_source, drill: 'last_touch_source', opts: { filterDim: 'source', asTable: true,
           help: `${def.credit ?? ''} The "+" on App Installed shows the source of the touch before the install.`,
-          expand: { key: 'App Installed', rows: d?.by_app_prev_source ?? [], onPick: (key) => open(`App Installed (last touch) · touch before it: ${key}`, 'app_prev_source', key, 'paying users credited to an App Installed last touch whose touch before the install has this source · click a row for the lead record') } })}
-        {card('Touch source distribution (first touch)', d?.by_first_source, 'first_touch_source', 'tone-orange', { asTable: true, help: def.first_credit })}
-        {card('Staff-wise (last touch)', d?.by_last_staff, 'last_touch_staff', 'tone-pink', { filterDim: 'staff', asTable: true })}
-        {card('Staff-wise (first touch)', d?.by_first_staff, 'first_touch_staff', 'tone-pink', { asTable: true, help: def.first_credit })}
-        {card('Medium wise conversion (last touch)', d?.by_last_medium, 'last_touch_medium', 'tone-green', { filterDim: 'medium', asTable: true })}
-        {card('Medium wise conversion (first touch)', d?.by_first_medium, 'first_touch_medium', 'tone-green', { asTable: true, help: def.first_credit })}
-        {card('Campaign wise conversion (last touch)', d?.by_last_campaign, 'last_touch_campaign', 'tone-brand', { filterDim: 'campaign', asTable: true })}
-        {card('Campaign wise conversion (first touch)', d?.by_first_campaign, 'first_touch_campaign', 'tone-brand', { asTable: true, help: def.first_credit })}
+          expand: { key: 'App Installed', rows: d?.by_app_prev_source ?? [], onPick: (key) => open(`App Installed (last touch) · touch before it: ${key}`, 'app_prev_source', key, 'paying users credited to an App Installed last touch whose touch before the install has this source · click a row for the lead record') } } }, { rows: d?.by_first_source, drill: 'first_touch_source', opts: { asTable: true } })}
+        {pair('Staff-wise', 'tone-pink', { rows: d?.by_last_staff, drill: 'last_touch_staff', opts: { filterDim: 'staff', asTable: true } }, { rows: d?.by_first_staff, drill: 'first_touch_staff', opts: { asTable: true } })}
+        {pair('Medium wise conversion', 'tone-green', { rows: d?.by_last_medium, drill: 'last_touch_medium', opts: { filterDim: 'medium', asTable: true } }, { rows: d?.by_first_medium, drill: 'first_touch_medium', opts: { asTable: true } })}
+        {pair('Campaign wise conversion', 'tone-brand', { rows: d?.by_last_campaign, drill: 'last_touch_campaign', opts: { filterDim: 'campaign', asTable: true } }, { rows: d?.by_first_campaign, drill: 'first_touch_campaign', opts: { asTable: true } })}
         <ChartCard title="Turnaround time" tone="tone-green" help={def.tat} loading={q.isLoading} error={q.error} rows={d?.tat?.[tat]?.buckets ?? []} height={240}
           subtitle={d?.tat ? `${fmtInt(d.tat[tat].leads)} paying users · median ${d.tat[tat].median_days == null ? '–' : fmt1(d.tat[tat].median_days)} d · average ${d.tat[tat].avg_days == null ? '–' : fmt1(d.tat[tat].avg_days)} d` : 'days to the first payment'}
           actions={<Segmented size="xs" value={tat} onChange={setTat} options={[
