@@ -360,14 +360,14 @@ overview.get('/overview', (c) =>
       // first valid payment (is_pre_conversion). Overall = those touches on any date; date-wise = only the ones dated inside the range. The
       // same leads in both, so overall >= date-wise. (Was: all-time touch count incl. touches after paying, weighted by touch rows, and the
       // overall one ignored the date range: every converted lead in the database.)
-      want('avg_window') ? sql<{ avg_rows: number | null; avg_leads: number | null; n_leads: number }[]>`
+      want('avg_window') ? sql<{ avg_rows: number | null; avg_leads: number | null; n_leads: number; n_touches: number }[]>`
         WITH c AS (SELECT DISTINCT t.lead_id FROM analytics.mv_touch_flat t WHERE ${w} AND ${convFirst})
-        SELECT avg(n)::float8 AS avg_rows, avg(n)::float8 AS avg_leads, count(*)::int AS n_leads
+        SELECT avg(n)::float8 AS avg_rows, avg(n)::float8 AS avg_leads, count(*)::int AS n_leads, COALESCE(sum(n), 0)::int AS n_touches
         FROM (SELECT (SELECT count(*) FROM analytics.mv_touch_flat t2 WHERE t2.lead_id = c.lead_id AND t2.is_pre_conversion
                         AND t2.touch_date BETWEEN ${periods.current.from} AND ${periods.current.to}) AS n FROM c) q` : none(),
-      want('avg_alltime') ? sql<{ avg_rows: number | null; avg_leads: number | null; n_leads: number }[]>`
+      want('avg_alltime') ? sql<{ avg_rows: number | null; avg_leads: number | null; n_leads: number; n_touches: number }[]>`
         WITH c AS (SELECT DISTINCT t.lead_id FROM analytics.mv_touch_flat t WHERE ${w} AND ${convFirst})
-        SELECT avg(n)::float8 AS avg_rows, avg(n)::float8 AS avg_leads, count(*)::int AS n_leads
+        SELECT avg(n)::float8 AS avg_rows, avg(n)::float8 AS avg_leads, count(*)::int AS n_leads, COALESCE(sum(n), 0)::int AS n_touches
         FROM (SELECT (SELECT count(*) FROM analytics.mv_touch_flat t2 WHERE t2.lead_id = c.lead_id AND t2.is_pre_conversion) AS n FROM c) q` : none(),
       want('stages') ? sql<{ key: string; leads: number; converted: number }[]>`
         SELECT t.lead_stage AS key, count(DISTINCT t.lead_id)::int AS leads, count(DISTINCT t.lead_id) FILTER (WHERE ${conv})::int AS converted
@@ -394,7 +394,7 @@ overview.get('/overview', (c) =>
           SELECT t.lead_id, max(t.lead_stage) AS stage, max(t.lead_created_date)::timestamptz AS created,
                  max(x.last_touch_at) AS last_touch   -- the lead's all-time last touch, precomputed (analytics.mv_lead_last_touch, sql/044)
           FROM analytics.mv_touch_flat t LEFT JOIN analytics.mv_lead_last_touch x ON x.lead_id = t.lead_id
-          WHERE ${w} AND t.lead_stage IN ('Not Willing Now', 'Disqualified', 'Not Connected', 'P2 Completed') GROUP BY t.lead_id)
+          WHERE ${w} AND t.lead_stage IN ('Not Willing Now', 'Disqualified', 'P2 Completed') GROUP BY t.lead_id)   -- lost stages (Not Connected is not lost, 2026-11-27)
         SELECT r.stage, count(*)::int AS total,
                count(*) FILTER (WHERE r.last_touch > COALESCE(ls.changed_at, GREATEST(r.created, '2026-03-01 00:00:00+00'::timestamptz)))::int AS reactivated
         FROM r LEFT JOIN salesforce.lead_stage ls ON ls.lead_id = r.lead_id AND ls.stage = r.stage
@@ -557,7 +557,7 @@ overview.get('/overview', (c) =>
         converted_first: 'Leads whose first payment came on or after a touch, and inside the window. Never-touched leads count when they paid after the lead was created ("no touch" split).',
         sf_converted: 'Touched leads marked Converted in Salesforce (reference only).',
         yet_new: `Leads of Total leads nobody has contacted since they came into the window: no call, no stage change and no course status change since the lead was created${f.basis === 'created' ? '' : ', or since its last touch in the range when that is later'}${yetDays ? `, ${yetDays} or more days ago` : ''}. New and Converted = current LM stage. Revised to New = every other stage: worked before, came back, not contacted since.`,
-        stage_react: 'Leads in Not Willing Now, Disqualified, Not Connected or P2 Completed that got a new touch after entering that stage.',
+        stage_react: 'Lost = Not Willing Now, Disqualified or P2 Completed. Counts the lost leads that got a new touch after entering that stage. "Of N lost leads" = those three stages in the LM funnel.',
         stage_conv_unpaid: 'Leads in stage Converted with no valid payment.',
         paid_other_stage: 'Leads that paid but are not in stage Converted.',
         converted_before: 'Leads that paid before their last touch in the range: customers who were touched again. A lead can also be in Total converted.',
@@ -600,7 +600,8 @@ overview.get('/overview', (c) =>
         class_on: bb ? 'bought' : 'lead',
         stage_conv_total: k.stage_conv_total + uStage('total'), stage_conv_unpaid: k.stage_conv_unpaid + uStage('unpaid'), paid_other_stage: k.paid_other_stage + uStage('paid_other'),
         stage_react: reactRows.reduce((a, r) => a + r.reactivated, 0),
-        stage_react_total: reactRows.reduce((a, r) => a + r.total, 0),
+        // the lost leads of Total leads (touched or not) = the three lost slices of the LM funnel
+        stage_react_total: stagesAll.filter((s) => ['Not Willing Now', 'Disqualified', 'P2 Completed'].includes(s.key)).reduce((a, s) => a + s.leads, 0),
         stage_react_by: reactRows,
         // rates are against Total leads (leadsAll), not only the touched leads
         conv_rate: pct(k.converted, leadsAll),
@@ -614,10 +615,10 @@ overview.get('/overview', (c) =>
         touches_per_lead: k.leads ? Math.round((k.touches / k.leads) * 1000) / 1000 : null,
         avg_touches_alltime: avgAll?.avg_rows ?? null,
         avg_touches_alltime_per_lead: avgAll?.avg_leads ?? null,
-        avg_touches_alltime_n: avgAll?.n_leads ?? 0,
+        avg_touches_alltime_n: avgAll?.n_leads ?? 0, avg_touches_alltime_touches: avgAll?.n_touches ?? 0,
         avg_touches_window: avgWin?.avg_rows ?? null,
         avg_touches_window_per_lead: avgWin?.avg_leads ?? null,
-        avg_touches_window_n: avgWin?.n_leads ?? 0,
+        avg_touches_window_n: avgWin?.n_leads ?? 0, avg_touches_window_touches: avgWin?.n_touches ?? 0,
         stale_new: stale?.stale_new ?? 0, stale_new_untouched: stale?.stale_new_untouched ?? 0, new_total: stale?.new_total ?? 0, stale_days: staleDays,
         stale_nc: stale?.stale_nc ?? 0, stale_nc_untouched: stale?.stale_nc_untouched ?? 0, nc_total: stale?.nc_total ?? 0,
         new_leads: newLeads?.new_leads ?? 0, new_leads_touched: newLeads?.new_leads_touched ?? 0,

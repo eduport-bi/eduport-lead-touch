@@ -19,7 +19,7 @@ interface OverviewResponse {
     conv_ay: Record<'after' | 'before', { key: string; leads: number }[]>;
     touches_per_lead: number | null;
     avg_touches_alltime: number | null; avg_touches_alltime_per_lead: number | null; avg_touches_alltime_n: number;
-    avg_touches_window: number | null; avg_touches_window_per_lead: number | null; avg_touches_window_n: number;
+    avg_touches_window: number | null; avg_touches_window_per_lead: number | null; avg_touches_window_n: number; avg_touches_window_touches: number; avg_touches_alltime_touches: number;
     stale_new: number; stale_new_untouched: number; new_total: number; stale_days: number;
     stale_nc: number; stale_nc_untouched: number; nc_total: number;
     stage_react: number; stage_react_total: number; stage_react_by: { stage: string; total: number; reactivated: number }[];
@@ -42,7 +42,7 @@ const MEASURE_LABEL: Record<Measure, string> = { leads: 'Total leads', converted
 
 const ALL_COLS: Col<DimRow>[] = [
   // long values (course and campaign names) wrap onto a second line instead of being cut (2026-11-27)
-  { key: 'key', header: '', render: (v) => <span className="block min-w-[12rem] max-w-[22rem] whitespace-normal break-words leading-snug">{String(v ?? '')}</span> }, { key: 'leads', header: 'Total leads', bar: true },
+  { key: 'key', header: '', render: (v) => <span className="block min-w-[9rem] max-w-[16rem] whitespace-normal leading-snug [overflow-wrap:anywhere]">{String(v ?? '')}</span> }, { key: 'leads', header: 'Total leads', bar: true },
   { key: 'converted', header: 'Converted' }, { key: 'conv_rate', header: 'Conv %', render: (v) => fmtPct(v as number) },
   { key: 'converted_first', header: 'Converted - First Purchase Ever' },
 ];
@@ -187,15 +187,15 @@ export default function Overview() {
           <Kpi tone="tone-brand" icon={<Icon.Users />} title="Total leads" value={fmtInt(k.leads)}
             sub={f.basis === 'created' ? `created ${f.from} → ${f.to} · ${fmtInt(k.new_leads_touched)} touched · ${fmtInt(Math.max(0, k.new_leads - k.new_leads_touched))} not touched yet` : `${fmtInt(k.new_leads)} created in the window + ${fmtInt(Math.max(0, k.leads - k.new_leads))} older leads touched in it`}
             def={`${def.leads_basis ?? ''} ${def.leads ?? ''}`} onClick={() => openNew(undefined, 'Total leads', f.basis !== 'created')} />
-          <Kpi tone="tone-teal" icon={<Icon.Touch />} title="Total lead touches" value={fmtInt(k.touches)} sub={`${fmt2(k.touches_per_lead)} touches per lead`} def={def.touches} onClick={() => open('touches', 'Total lead touches')} />
+          <Kpi tone="tone-teal" icon={<Icon.Touch />} title="Total lead touches" value={fmtInt(k.touches)} sub={`${fmt2(k.touches_per_lead)} touches per lead = ${fmtInt(k.touches)} touches ÷ ${fmtInt(k.leads_touched)} touched leads`} def={def.touches} onClick={() => open('touches', 'Total lead touches')} />
           <Kpi tone="tone-orange" icon={<Icon.Check />} title="Total converted" value={fmtInt(k.converted_first)} sub={f.pay ? `${fmtPct(k.conv_rate_first)} of leads · paid ${f.pfrom} → ${f.pto}` : `${fmtPct(k.conv_rate_first)} of leads · paid after a touch`} def={`${def.converted_first} ${def.conv_ay}`} onClick={() => open('converted_first', 'Total converted', undefined, undefined, 'touched leads of the selection with a first valid payment on/after a touch · the never-touched converted leads are under the "no touch" split')}
             split={[...aySplit(k.conv_ay.after, 'converted_first', 'Total converted'), { label: 'no touch', value: fmtInt(k.converted_untouched), title: 'leads of the selection never touched, first valid payment on/after the day they were created · click for the leads', onClick: () => openUntouched('after') }]} />
           <Kpi tone="tone-slate" icon={<Icon.Check />} title="Converted before last touch" value={fmtInt(k.converted_before)}
             sub={k.class_on === 'bought' ? `${fmtPct(k.conv_rate_before)} of leads · paid for the class before their last touch` : `${fmtPct(k.conv_rate_before)} of leads · paid before their last touch`}
             def={`${def.converted_before} ${k.class_on === 'bought' ? def.class_on ?? '' : ''} ${def.conv_ay}`} onClick={() => open('converted_before', 'Converted before last touch', undefined, undefined, 'leads whose first valid payment came before their last touch in the selection')}
             split={aySplit(k.conv_ay.before, 'converted_before', 'Converted before last touch')} />
-          <Kpi tone="tone-violet" icon={<Icon.Avg />} title="Avg touches before conversion" value={fmt2(k.avg_touches_alltime)} def={`${def.avg_touches_alltime} ${def.avg_per_lead}`} onClick={() => open('avg_alltime', 'Avg touches before conversion', undefined, undefined, 'leads in Total converted, with their touches on or before the payment (any date)')} />
-          <Kpi tone="tone-green" icon={<Icon.Calendar />} title="Avg touches before conversion (date-wise)" value={fmt2(k.avg_touches_window)} def={`${def.avg_touches_window} ${def.avg_per_lead}`} onClick={() => open('avg_window', 'Avg touches before conversion (date-wise)', undefined, undefined, 'leads in Total converted, with their touches on or before the payment dated in the range')} />
+          <Kpi tone="tone-violet" icon={<Icon.Avg />} title="Avg touches before conversion" value={fmt2(k.avg_touches_alltime)} sub={`${fmtInt(k.avg_touches_alltime_touches)} touches before paying ÷ ${fmtInt(k.avg_touches_alltime_n)} converted leads · any date`} def={`${def.avg_touches_alltime} ${def.avg_per_lead}`} onClick={() => open('avg_alltime', 'Avg touches before conversion', undefined, undefined, 'leads in Total converted, with their touches on or before the payment (any date)')} />
+          <Kpi tone="tone-green" icon={<Icon.Calendar />} title="Avg touches before conversion (date-wise)" value={fmt2(k.avg_touches_window)} sub={`${fmtInt(k.avg_touches_window_touches)} touches before paying, in the dates ÷ ${fmtInt(k.avg_touches_window_n)} converted leads`} def={`${def.avg_touches_window} ${def.avg_per_lead}`} onClick={() => open('avg_window', 'Avg touches before conversion (date-wise)', undefined, undefined, 'leads in Total converted, with their touches on or before the payment dated in the range')} />
           <Kpi tone="tone-slate" icon={<Icon.Spark />} title="Stage Converted · not paid" value={fmtInt(k.stage_conv_unpaid)} sub={`of ${fmtInt(k.stage_conv_total)} leads in stage Converted`} def={def.stage_conv_unpaid} onClick={() => open('stage_conv_unpaid', 'Stage Converted · not paid')} />
           <Kpi tone="tone-teal" icon={<Icon.Check />} title="Paid · stage not Converted" value={fmtInt(k.paid_other_stage)} sub="counted in Total converted, but the Salesforce stage was never moved to Converted" def={def.paid_other_stage} onClick={() => open('paid_other_stage', 'Paid · stage not Converted')} />
           <Kpi tone="tone-violet" icon={<Icon.Touch />} title="Lost leads with new activity" value={fmtInt(k.stage_react)} sub={`of ${fmtInt(k.stage_react_total)} lost leads · touched again`} def={def.stage_react}

@@ -82,13 +82,14 @@ export function DataTable<R extends object>({ rows, columns, compact, onRowClick
               {renderExpanded && <th className="th w-6" />}
               {hg.headers.map((h) => {
                 const c = cols.find((x) => x.key === h.id);
+                // a long column name ("Converted - First Purchase Ever") wraps onto two lines instead of widening the table (2026-11-27)
                 const sid = serverSort ? serverSort.sortId(h.id) : null;
                 const dir = serverSort ? (sid && serverSort.sort.id === sid ? (serverSort.sort.desc ? 'desc' : 'asc') : false) : h.column.getIsSorted();
                 const onHead = serverSort
                   ? (sid ? () => serverSort.onSort({ id: sid, desc: serverSort.sort.id === sid ? !serverSort.sort.desc : true }) : undefined)
                   : h.column.getToggleSortingHandler();
                 return (
-                  <th key={h.id} className={`th ${onHead ? 'cursor-pointer' : 'cursor-default'} select-none ${c?.align === 'right' || isNum((rows[0] as Record<string, unknown> | undefined)?.[h.id]) ? 'text-right' : ''}`} style={{ width: c?.width }} onClick={onHead}
+                  <th key={h.id} className={`th ${(c?.header.length ?? 0) > 14 ? '!whitespace-normal min-w-[6.5rem] max-w-[8.5rem] align-bottom leading-tight' : ''} ${onHead ? 'cursor-pointer' : 'cursor-default'} select-none ${c?.align === 'right' || isNum((rows[0] as Record<string, unknown> | undefined)?.[h.id]) ? 'text-right' : ''}`} style={{ width: c?.width }} onClick={onHead}
                     title={serverSort ? (sid ? 'Sort all the leads by this column' : 'This column cannot be sorted') : undefined}>
                     {flexRender(h.column.columnDef.header, h.getContext())} {dir === 'asc' ? '▲' : dir === 'desc' ? '▼' : ''}
                   </th>

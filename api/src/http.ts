@@ -135,6 +135,21 @@ export async function timedAll<T extends readonly unknown[] | []>(names: readonl
   return settled.map((r) => (r as PromiseFulfilledResult<unknown>).value) as unknown as { -readonly [P in keyof T]: Awaited<T[P]> };
 }
 
+/** Sort a lead / payer list by ANY of its columns (user, 2026-11-27). The list queries sort and page first and fill the extra columns
+ *  (calls, payments, touch points ...) for the page only; a sort on one of those extra columns builds the whole list, then sorts and
+ *  pages it here. `cols` is the whitelist of column names (only these reach ORDER BY); `fast` = the keys the list query sorts itself. */
+export function sortAnyColumn<Q extends Record<string, string>>(
+  sql: import('postgres').Sql, q: Q, cols: readonly string[], fast: Record<string, string>, idCol: string,
+  run: (q: Q, page: { limit: number; offset: number } | null) => import('postgres').PendingQuery<import('postgres').Row[]>,
+  page: { limit: number; offset: number },
+) {
+  const key = q.sort ?? '';
+  if (!key || fast[key] || !cols.includes(key)) return run(q, page);
+  // blanks go last in both directions, so the first page always shows values (2026-11-27)
+  const dir = q.dir === 'asc' ? sql`ASC NULLS LAST` : sql`DESC NULLS LAST`;
+  return sql`SELECT * FROM (${run({ ...q, sort: '' }, null)}) z ORDER BY z.${sql(key)} ${dir}, z.${sql(idCol)} LIMIT ${page.limit} OFFSET ${page.offset}`;
+}
+
 export function intParam(q: Record<string, string>, key: string, def: number, min: number, max: number): number {
   const n = Number.parseInt(q[key] ?? '', 10);
   if (Number.isNaN(n)) return def;

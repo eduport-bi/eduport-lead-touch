@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Sql } from 'postgres';
 import type { AppEnv, Role } from '../env';
-import { handle, intParam, maskEmail, maskName, maskPhone, csvStream } from '../http';
+import { handle, intParam, maskEmail, maskName, maskPhone, csvStream, sortAnyColumn } from '../http';
 import { parseFilters, resolvePeriods, paymentPeriod, inList, andAll, isLeadDim, LEAD_DIMS, LIST_KEYS, icCourseIn, boughtBases, classPaid, classPopulation, classMatchKeep, type Filters, type Frag, type Period } from '../filters';
 import { FLAT_COLS } from './overview';
 
@@ -218,7 +218,7 @@ function listWhere(sql: Sql, f: Filters, p: Period, q: Record<string, string>): 
 function leadQuery(sql: Sql, f: Filters, p: Period, q: Record<string, string>, page: { limit: number; offset: number } | null) {
   const where = listWhere(sql, f, p, q);
   const sortCol = SORTABLE[q.sort ?? ''] ?? 'created_at';
-  const dir = q.dir === 'asc' ? sql`ASC NULLS FIRST` : sql`DESC NULLS LAST`;
+  const dir = q.dir === 'asc' ? sql`ASC NULLS LAST` : sql`DESC NULLS LAST`;
   const base = sql`
     SELECT l.lead_id, l.lead_name, l.first_name, l.last_name, l.mobile, l.email, l.phone_key, l.created_at, l.created_date, l.lead_stage, l.class_raw, l.class_group,
            l.lead_source, l.lead_type, l.priority, l.owner_name, l.district, l.city, l.lm_reason, l.best_ic_status, l.is_duplicate, l.sf_is_converted, l.sf_touch_count
@@ -258,7 +258,7 @@ newLeads.get('/overview/new_leads', (c) =>
   handle(c, async ({ sql, f, periods, q, role }) => {
     const limit = intParam(q, 'limit', 50, 1, 500);   // up to 500 a page (2026-11-27)
     const page = intParam(q, 'page', 1, 1, 100000);
-    const rows = await leadQuery(sql, f, periods.current, q, { limit, offset: (page - 1) * limit });
+    const rows = await sortAnyColumn(sql, q, COLS, SORTABLE, 'lead_id', (qq, pg) => leadQuery(sql, f, periods.current, qq, pg), { limit, offset: (page - 1) * limit });
     const total = rows.length ? (rows[0].total_rows as number) : 0;
     return { page, limit, total, rows: rows.map((r) => { const { total_rows: _t, ...rest } = maskRow(r, role); return rest; }), masked: role === 'viewer', columns: COLS };
   }, 0),

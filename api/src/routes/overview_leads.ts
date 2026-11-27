@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Sql } from 'postgres';
 import type { AppEnv, Role } from '../env';
-import { handle, intParam, maskEmail, maskName, maskPhone, csvStream } from '../http';
+import { handle, intParam, maskEmail, maskName, maskPhone, csvStream, sortAnyColumn } from '../http';
 import { parseFilters, resolvePeriods, icCourseIn, type Filters, type Frag, type Period } from '../filters';
 import { flatWhere, FLAT_COLS, convCond, convAfterCond, convBeforeCond, tatBucket, activityBucket, activityDays, appOnlyQuick } from './overview';
 import { paymentPeriod } from '../filters';
@@ -122,7 +122,7 @@ function metricHaving(sql: Sql, metric: Metric, p: Period, f?: Filters, q: Recor
     case 'converted_before': return f ? sql`bool_or(${convBeforeCond(sql, f, paymentPeriod(f))})` : sql`bool_or(t.converted AND t.converted_at < t.touch_date)`;
     case 'sf_converted': return sql`bool_or(t.lead_sf_is_converted)`;
     case 'stage_conv_unpaid': return sql`max(t.lead_stage) = 'Converted' AND NOT bool_or(t.converted)`;
-    case 'stage_react': return sql`max(t.lead_stage) IN ('Not Willing Now', 'Disqualified', 'Not Connected', 'P2 Completed')
+    case 'stage_react': return sql`max(t.lead_stage) IN ('Not Willing Now', 'Disqualified', 'P2 Completed')
         AND (SELECT x.last_touch_at FROM analytics.mv_lead_last_touch x WHERE x.lead_id = t.lead_id) > analytics.stage_since(t.lead_id, max(t.lead_stage), max(t.lead_created_date)::timestamptz)`;
     case 'paid_other_stage': return sql`bool_or(${conv}) AND max(t.lead_stage) IS DISTINCT FROM 'Converted'`;
     // Yet to connect (the Overview "yet_new" card): no contact on/after the lead's first touch in the selection: no call Task (call_days),
@@ -191,7 +191,7 @@ function selection(sql: Sql, f: Filters, periods: { current: Period }, q: Record
 function leadQuery(sql: Sql, f: Filters, periods: { current: Period }, q: Record<string, string>, page: { limit: number; offset: number } | null) {
   const { metric, sel, pick, having } = selection(sql, f, periods, q);
   const sortCol = SORTABLE[q.sort ?? ''] ?? (metric.startsWith('stale') ? 'last_touch_in_window' : 'touches_in_window');
-  const dir = q.dir === 'asc' ? sql`ASC NULLS FIRST` : sql`DESC NULLS LAST`;
+  const dir = q.dir === 'asc' ? sql`ASC NULLS LAST` : sql`DESC NULLS LAST`;
   return sql<Rec[]>`
     WITH sel AS (
       SELECT t.lead_id, count(*)::int AS touches_in_window, max(t.n_touches_all)::int AS n_touches_all,
@@ -260,7 +260,7 @@ overviewLeads.get('/overview/leads', (c) =>
   handle(c, async ({ sql, f, periods, q, role }) => {
     const limit = intParam(q, 'limit', 50, 1, 500);   // up to 500 a page (2026-11-27)
     const page = intParam(q, 'page', 1, 1, 100000);
-    const rows = await leadQuery(sql, f, periods, q, { limit, offset: (page - 1) * limit });
+    const rows = await sortAnyColumn(sql, q, COLS, SORTABLE, 'lead_id', (qq, pg) => leadQuery(sql, f, periods, qq, pg), { limit, offset: (page - 1) * limit });
     const total = rows.length ? (rows[0].total_rows as number) : 0;
     return { page, limit, total, rows: rows.map((r) => { const { total_rows: _t, ...rest } = maskRow(r, role); return rest; }), masked: role === 'viewer', columns: COLS };
   }, 0),

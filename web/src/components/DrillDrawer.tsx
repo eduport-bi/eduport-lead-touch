@@ -25,7 +25,7 @@ const METRIC_LABEL: Record<DrillMetric, string> = {
   converted_first: 'leads whose first payment came after a touch',
   revised_new: 'leads yet to connect: no call Task, Lead Stage change or IC status change on or after their first touch in the selection (Converted leads included)',
   converted_before: 'leads already converted before the window started (first payment before the window)',
-  sf_converted: 'leads flagged Is_Converted__c in Salesforce', stage_conv_unpaid: 'leads in stage Converted with no valid payment on their phone (any date)', paid_other_stage: 'leads with a valid payment (Total converted rule) whose stage is not Converted', stage_react: 'leads in Not Willing Now / Disqualified / Not Connected / P2 Completed that received a new touch after that stage was set', avg_alltime: 'leads with a valid payment (all touches, no date filter)', avg_window: 'leads with a valid payment touched in the window',
+  sf_converted: 'leads flagged Is_Converted__c in Salesforce', stage_conv_unpaid: 'leads in stage Converted with no valid payment on their phone (any date)', paid_other_stage: 'leads with a valid payment (Total converted rule) whose stage is not Converted', stage_react: 'lost leads (Not Willing Now / Disqualified / P2 Completed) that received a new touch after that stage was set', avg_alltime: 'leads with a valid payment (all touches, no date filter)', avg_window: 'leads with a valid payment touched in the window',
   new_leads: 'Salesforce leads created inside the date range, touched or not',
   fee_paid: 'leads of the selection whose app account paid inside the date range',
 };
@@ -154,7 +154,7 @@ export function DrillDrawer({ drill, onClose }: { drill: Drill; onClose: () => v
   const pages = d ? Math.max(1, Math.ceil(d.total / d.limit)) : 1;
   const sortOpts: [string, string][] = drill.sortOptions ?? DEFAULT_SORTS;
   const sortIds = new Set(sortOpts.map(([id]) => id));
-  const sortLabel = (sortOpts.find(([id]) => id === sort.id)?.[1] ?? sort.id).toLowerCase();
+  const sortLabel = (sortOpts.find(([id]) => id === sort.id)?.[1] ?? cols.find((c) => (SORT_ALIAS[c.key] ?? c.key) === sort.id)?.header ?? sort.id.replace(/_/g, ' ')).toLowerCase();
   const dimLabel = dim ? (DIM_LABEL[dim] ?? EXTRA_LABEL[dim] ?? dim) : null;
   const canFilterPage = !!dim && value !== undefined && dim in DIM_LABEL;
 
@@ -195,7 +195,7 @@ export function DrillDrawer({ drill, onClose }: { drill: Drill; onClose: () => v
           {view === 'list' && d && (
             <div className={`h-full ${r.isFetching ? 'opacity-70' : ''}`}>
               <DataTable rows={d.rows} columns={cols} compact maxHeight="100%" rowKey={(x) => String(x.lead_id ?? x.user_id)} onRowClick={(x) => { if (x.lead_id) setLeadId(String(x.lead_id)); }}
-                serverSort={{ sort, onSort: (s) => { setSort(s); setPage(1); }, sortId: (k) => { const id = SORT_ALIAS[k] ?? k; return sortIds.has(id) ? id : null; } }} />
+                serverSort={{ sort, onSort: (s) => { setSort(s); setPage(1); }, sortId: (k) => SORT_ALIAS[k] ?? k }} />
             </div>
           )}
         </div>

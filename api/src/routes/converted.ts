@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Sql } from 'postgres';
 import type { AppEnv, Role } from '../env';
-import { handle, intParam, maskEmail, maskName, maskPhone, pct, csvStream, timedAll } from '../http';
+import { handle, intParam, maskEmail, maskName, maskPhone, pct, csvStream, timedAll, sortAnyColumn } from '../http';
 import { LIST_KEYS, parseFilters, resolvePeriods, sameClass, noStreamCovered, type Filters, type Frag, type Period } from '../filters';
 import { shapeTat, tatBucket, type TatRow } from './overview';
 
@@ -316,7 +316,7 @@ function searchCond(sql: Sql, s: string): Frag {
 function listQuery(sql: Sql, f: Filters, p: Period, q: Record<string, string>, page: { limit: number; offset: number } | null) {
   const w = payerWhere(sql, f, p, q);
   const sortCol = SORTABLE[q.sort ?? ''] ?? 'last_payment_date';
-  const dir = q.dir === 'asc' ? sql`ASC NULLS FIRST` : sql`DESC NULLS LAST`;
+  const dir = q.dir === 'asc' ? sql`ASC NULLS LAST` : sql`DESC NULLS LAST`;
   // courses / grades / payments / dates / revenue = the user's payments INSIDE the selected dates (payment method switch and purchased grade /
   // course selection applied); the *_all_time columns keep the lifetime figures, so a returning customer is still recognisable
   return sql<Rec[]>`
@@ -358,7 +358,7 @@ converted.get('/converted/users', (c) =>
     const q = withGrade(f, q0);
     const limit = intParam(q, 'limit', 50, 1, 500);   // up to 500 a page (2026-11-27)
     const page = intParam(q, 'page', 1, 1, 100000);
-    const rows = await listQuery(sql, f, periods.current, q, { limit, offset: (page - 1) * limit });
+    const rows = await sortAnyColumn(sql, q, COLS, SORTABLE, 'user_id', (qq, pg) => listQuery(sql, f, periods.current, qq, pg), { limit, offset: (page - 1) * limit });
     const total = rows.length ? (rows[0].total_rows as number) : 0;
     return { page, limit, total, rows: rows.map((r) => { const { total_rows: _t, ...rest } = maskRow(r, role); return rest; }), masked: role === 'viewer', columns: COLS };
   }, 0),
