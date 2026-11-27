@@ -171,23 +171,16 @@ const joinFrags = (sql: Sql, parts: Frag[], sep: Frag) => parts.reduce((a, x) =>
  * (GROUPING SETS) instead of one statement per card: ~0.4 s for seven cards instead of 7 x 0.13 s plus seven pooled connections.
  * A card whose own dim IS filtered keeps its separate byDim (its WHERE drops that filter).
  */
-/** The 2-hour app rule on the touch cards (user, 2026-11-27): an Eduport App touch made less than 2 hours before the lead's last valid
+/** The 30-minute app rule (user, 2026-11-27; replaces the 2-hour rule): an Eduport App touch made less than 30 minutes before the lead's last valid
  *  payment does not make the lead "converted" under that touch's values (touch point, source, medium, campaign, staff) - the same rule as
  *  the last-touch credit (sql/021), including its exception: when the app touch is the lead's only touch up to then, it still counts -
  *  unless it came less than 30 minutes before the payment (appOnlyQuick, 2026-11-27). */
 export function appQuickTouch(sql: Sql): Frag {
-  return sql`(t.touch_point = 'Eduport App' AND t.last_payment_at IS NOT NULL AND t.touch_at > t.last_payment_at - interval '2 hours'
-           AND t.touch_at <= t.last_payment_at
-           AND (t.touch_at > t.last_payment_at - interval '30 minutes'
-                OR EXISTS (SELECT 1 FROM analytics.mv_touch_flat t3 WHERE t3.lead_id = t.lead_id AND t3.touch_at < t.touch_at)))`;
-}
-/** The 30-minute rule (user, 2026-11-27): when the Eduport App touch is the lead's ONLY touch up to the payment and was made less than
- *  30 minutes before it, nobody gets the credit - the lead counts as "no touch" (the 2-hour exception no longer saves it). Touch row t. */
-export function appOnlyQuick(sql: Sql): Frag {
   return sql`(t.touch_point = 'Eduport App' AND t.last_payment_at IS NOT NULL AND t.touch_at > t.last_payment_at - interval '30 minutes'
-           AND t.touch_at <= t.last_payment_at
-           AND NOT EXISTS (SELECT 1 FROM analytics.mv_touch_flat t3 WHERE t3.lead_id = t.lead_id AND t3.touch_at < t.touch_at))`;
+           AND t.touch_at <= t.last_payment_at)`;
 }
+/** same touch: an Eduport App touch less than 30 minutes before the payment (kept as a second name for the lead lists) */
+export const appOnlyQuick = appQuickTouch;
 
 async function byDims(sql: Sql, w: Frag, cols: CardDim[], conv: Frag, convFirst: Frag): Promise<Record<string, DimRow[]>> {
   const out: Record<string, DimRow[]> = Object.fromEntries(cols.map((c) => [c, []]));
@@ -505,11 +498,13 @@ overview.get('/overview', (c) =>
       want('untouched_dims') ? untouchedCards : none(),
       want('last_touch') ? sql<DimRow[]>`
         WITH s AS (
-          SELECT t.lead_id, t.touch_point, COALESCE(t.tab_is_last_touch, false) AS is_last, t.touch_at, t.touch_id, (${conv}) AS c, (${convFirst}) AS cf,
-                 (COALESCE(t.tab_is_last_touch, false) AND ${appOnlyQuick(sql)}) AS nc
+          -- credited (30-minute rule, 2026-11-27): a touch on or before the lead's last payment that is not an Eduport App touch made
+          -- less than 30 minutes before it; a paying lead whose only touches before paying are such app touches is "(no touch)"
+          SELECT t.lead_id, t.touch_point, (t.last_payment_at IS NOT NULL AND t.touch_at <= t.last_payment_at AND NOT ${appQuickTouch(sql)}) AS is_last,
+                 t.touch_at, t.touch_id, (${conv}) AS c, (${convFirst}) AS cf, ${appQuickTouch(sql)} AS quick
           FROM analytics.mv_touch_flat t WHERE ${wx('touch_point')}),
         pick AS (SELECT DISTINCT ON (s.lead_id) s.lead_id, s.touch_point FROM s ORDER BY s.lead_id, s.is_last DESC, s.touch_at DESC, s.touch_id DESC),
-        a AS (SELECT s.lead_id, bool_or(s.c) AS c, bool_or(s.cf) AS cf, bool_or(s.nc) AS nc FROM s GROUP BY s.lead_id)
+        a AS (SELECT s.lead_id, bool_or(s.c) AS c, bool_or(s.cf) AS cf, (bool_or(s.quick) AND NOT bool_or(s.is_last)) AS nc FROM s GROUP BY s.lead_id)
         SELECT CASE WHEN a.nc THEN '(no touch)' ELSE COALESCE(p.touch_point, '(null)') END AS key, count(*)::int AS touches, count(*)::int AS leads,
                count(*) FILTER (WHERE a.c)::int AS converted, count(*) FILTER (WHERE a.cf)::int AS converted_first
         FROM pick p JOIN a ON a.lead_id = p.lead_id GROUP BY 1` : none(),
@@ -567,12 +562,12 @@ overview.get('/overview', (c) =>
         avg_touches_window: 'Leads in Total converted: average touches on or before the payment, dated inside the range.',
         avg_per_lead: 'Each lead counted once.',
         lead_source: 'The Lead Source on the lead record. Each lead counted once, so the column adds up to Total leads.',
-        last_touch: 'Each lead under its last touch point. For a paying lead, the last touch before the payment; an app install less than 2 hours before the payment is skipped. When the app install is the only touch and came less than 30 minutes before the payment, the lead counts as no touch.',
+        last_touch: 'Each lead under its last touch point. For a paying lead, the last touch before the payment. An Eduport App touch less than 30 minutes before the payment is skipped: the touch before it counts, and with none the lead is no touch.',
         lm_reason: 'The LM Reason on the lead record, set by the salesperson.',
         reason: 'The reason on the lead\'s last call. No call = no call logged since May 2026.',
         stale_new: `Leads still in stage New, created over ${staleDays} days ago, with no touch in the last ${staleDays} days.`,
         stale_nc: `Same for stage Not Connected.`,
-        dim_converted: 'Converted = leads with a touch of that value that paid. A lead can appear in several rows. An Eduport App touch less than 2 hours before the payment does not count, unless it is the only touch.',
+        dim_converted: 'Converted = leads with a touch of that value that paid. A lead can appear in several rows. An Eduport App touch less than 30 minutes before the payment does not count.',
     });
     if (part === 'rest') return {
       period: periods.current, payment_period: pp, basis: f.basis === 'created' ? 'created' : 'touch', part,

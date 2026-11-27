@@ -114,7 +114,8 @@ function metricHaving(sql: Sql, metric: Metric, p: Period, f?: Filters, q: Recor
     }
     case 'converted': return sql`bool_or(${conv})`;
     case 'first_touch': return sql`bool_or(t.tab_is_first_touch AND ${conv} AND NOT ${appOnlyQuick(sql)})`;
-    case 'last_touch': return sql`bool_or(t.tab_is_last_touch AND ${conv} AND NOT ${appOnlyQuick(sql)})`;
+    // credited by the 30-minute rule (2026-11-27): a touch before the payment that is not an Eduport App touch < 30 min before it
+    case 'last_touch': return sql`bool_or(t.last_payment_at IS NOT NULL AND t.touch_at <= t.last_payment_at AND NOT ${appOnlyQuick(sql)} AND ${conv})`;
     // Total converted: first valid payment on/after a touch AND not before the window start (same rule as the Overview KPI)
     // (purchased class: the date of the payment for the picked class, see overview.ts convAfterCond / convBeforeCond)
     case 'converted_first': return f ? sql`bool_or(${convAfterCond(sql, f, paymentPeriod(f)?.from ?? p.from)})` : sql`bool_or(t.converted AND t.is_pre_conversion AND t.converted_at >= ${p.from})`;

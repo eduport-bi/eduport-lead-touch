@@ -280,7 +280,7 @@ converted.get('/converted', (c) =>
         tat: 'Days to the user\'s first payment. Lead created → paid = from the lead\'s creation day. Last touch → paid = from the last touch before the payment. Median = half the users were faster.',
         no_touch: 'Users with no touch before their payment.',
         no_lead: 'Paying users whose phone matches no Salesforce lead.',
-        credit: 'Each user is credited to one touch: the last touch before the payment. An app install less than 2 hours before the payment is skipped, unless it is the only touch.',
+        credit: 'Each user is credited to one touch: the last touch before the payment. An Eduport App touch less than 30 minutes before the payment is skipped: the touch before it gets the credit, and with none the user is No Touch Before Payment.',
         touches: 'Touches before the payment, for the users in the row.',
         app_prev: 'Users whose last touch is App Installed, split by the source of the touch before it. No Earlier Touch = the install was the only touch.',
         first_credit: 'Each user is credited to their first touch before the payment: the touch that brought them in.',
