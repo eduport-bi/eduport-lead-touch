@@ -245,7 +245,9 @@ export default function Overview() {
           help="Interested Course status of the leads in Total leads. A lead with several courses appears under each.">
           <HBars colorful data={(d?.ic_status ?? []).map((s) => ({ key: s.key, value: s.leads, secondary: s.ics }))} valueLabel="Total leads" secondaryLabel="Interested courses" secondaryFormat={fmtInt} onClick={(key) => toggleValue('ic_status', key)} />
         </ChartCard>
-        {dimCard('Touch point analysis', rd?.touch_point, 'touch_point', ['leads', 'converted'], 'tone-teal', { colorful: true, height: 270 })}
+        {/* a lead with several touch points is in several rows, so the rows add up to more than the leads: the subtitle gives the unique leads (2026-11-27) */}
+        {dimCard('Touch point analysis', rd?.touch_point, 'touch_point', ['leads', 'converted'], 'tone-teal', { colorful: true, height: 270,
+          subtitle: k ? `${fmtInt(k.leads_touched)} unique leads · a lead with several touch points is counted in each row · click rows to filter the other cards` : undefined })}
         {dimCard('Lead source distribution', rd?.lead_source, 'lead_source', ['leads', 'converted'], 'tone-orange', { asTable: true, height: 270, subtitle: 'Total leads by the Lead Source on the lead record · each lead once · click rows to filter the other cards', help: def.lead_source })}
         {dimCard('Last touch distribution', rd?.last_touch, 'touch_point', ['leads', 'converted'], 'tone-brand', { asTable: true, height: 270, subtitle: 'Total leads by the touch point of their LAST touch · an app touch less than 2 hours before the payment is passed over · click rows to filter by touch point', help: def.last_touch })}
         {dimCard('Class (Lead Master)', rd?.class_raw, 'class_raw', ['leads', 'converted'], 'tone-violet', { limit: 14, height: 300, colorful: true, help: 'The Class on the lead record, not the course bought. Purchased classes are on the Converted page.' })}

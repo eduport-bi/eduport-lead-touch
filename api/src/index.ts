@@ -103,7 +103,6 @@ export function warmUrls(): string[] {
     // Overview is asked for in two halves (part=top / part=rest, 2026-11-26); the top half takes yet_days, the rest half no day count
     `/api/overview?${base('created')}&part=top&yet_days=5`, `/api/overview?${base('created')}&part=rest`,
     `/api/converted?${base('created')}&pm=all`,
-    `/api/touch-attribution?${base('created')}`,
     ...['class_group', 'touch_point', 'source', 'campaign', 'medium'].map((dim) => `/api/filters?${base('created')}&dim=${dim}&limit=5000`),
     `/api/overview?${base('touch')}&part=top&yet_days=5`, `/api/overview?${base('touch')}&part=rest`,
     `/api/converted?${base('touch')}&pm=all`,

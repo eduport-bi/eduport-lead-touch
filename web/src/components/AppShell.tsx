@@ -11,8 +11,6 @@ import { useUpdating } from '../lib/api';
 
 export const NAV = [
   { to: '/', label: 'Overview', icon: <Icon.Home /> },
-  { to: '/first-touch', label: 'First Touch', icon: <Icon.Touch /> },
-  { to: '/last-touch', label: 'Last Touch', icon: <Icon.Check /> },
   { to: '/converted', label: 'Converted', icon: <Icon.Spark /> },
   { to: '/analysis', label: 'Analysis', icon: <Icon.Table /> },
   { to: '/leads', label: 'Lead Explorer', icon: <Icon.Users /> },

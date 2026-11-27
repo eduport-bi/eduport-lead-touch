@@ -11,7 +11,6 @@ function ExplorerRoute({ children }: { children: React.ReactNode }) {
 }
 
 const Overview = lazy(() => import('./pages/Overview'));
-const TouchAttribution = lazy(() => import('./pages/TouchAttribution'));
 const Converted = lazy(() => import('./pages/Converted'));
 const Analysis = lazy(() => import('./pages/Analysis'));
 const LeadExplorer = lazy(() => import('./pages/LeadExplorer'));
@@ -24,8 +23,6 @@ export default function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<Suspense fallback={<Fallback />}><Overview /></Suspense>} />
-        <Route path="first-touch" element={<Suspense fallback={<Fallback />}><TouchAttribution mode="first" /></Suspense>} />
-        <Route path="last-touch" element={<Suspense fallback={<Fallback />}><TouchAttribution mode="last" /></Suspense>} />
         <Route path="converted" element={<Suspense fallback={<Fallback />}><Converted /></Suspense>} />
         <Route path="analysis" element={<Suspense fallback={<Fallback />}><Analysis /></Suspense>} />
         <Route path="leads" element={<ExplorerRoute><Suspense fallback={<Fallback />}><LeadExplorer /></Suspense></ExplorerRoute>} />
