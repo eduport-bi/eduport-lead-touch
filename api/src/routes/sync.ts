@@ -63,7 +63,7 @@ export async function dailySync(env: Env, scheduledTime: number): Promise<string
   const run = await latestRun(env);
   if (run && RUNNING.includes(run.status)) { await mark(`running ${run.id}`); return `a sync is already running (${run.id})`; }
   const r = await gh(env, '/actions/workflows/sync.yml/dispatches', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ref: 'main', inputs: { full: false, objects: '' } }),
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ref: 'main', inputs: { full: false, objects: '', nightly: true } }),   // nightly: the reorder + compaction run (sync.ts)
   });
   if (r.status !== 204) throw new Error(`daily sync dispatch failed: GitHub API ${r.status}: ${(await r.text()).slice(0, 200)}`);
   await mark('started');

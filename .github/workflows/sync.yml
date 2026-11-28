@@ -17,6 +17,10 @@ on:
         description: 'Comma list to restrict (blank = all)'
         type: string
         default: ''
+      nightly:
+        description: 'The 06:00 run (set by the Worker): also reorders the hot views and compacts; a manual Sync now leaves it off'
+        type: boolean
+        default: false
       sql:
         description: 'Ops only: run this SQL against the analytics DB instead of syncing'
         type: string
@@ -54,6 +58,8 @@ jobs:
       TASK_SINCE: ${{ vars.TASK_SINCE || '2026-01-01T00:00:00Z' }}
       SYNC_OBJECTS: ${{ inputs.objects }}
       SKIP_OBJECTS: ${{ vars.SKIP_OBJECTS }}
+      NIGHTLY_RUN: ${{ inputs.nightly }}
+      CALLYZER_API_KEY: ${{ secrets.CALLYZER_API_KEY }}
       WARM_SECRET: ${{ secrets.WARM_SECRET }}
     steps:
       - uses: actions/checkout@v4

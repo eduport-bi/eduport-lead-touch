@@ -29,6 +29,7 @@ import fs from 'node:fs';
 import postgres, { type Sql } from 'postgres';
 import { OBJECTS, type ObjectSpec } from './objects.js';
 import { txPooler } from './sync-url.js';
+import { syncCallyzer } from './callyzer.js';
 
 const API_VERSION = 'v62.0';
 const BATCH = 1000;
@@ -45,6 +46,9 @@ const REFRESH_ONLY = args.has('--refresh-only');
 const REFRESH_AFTER = (process.env.REFRESH_AFTER_SYNC ?? '1') === '1';
 const ONLY = process.env.SYNC_OBJECTS?.split(',').map((x) => x.trim()).filter(Boolean) ?? [];
 const SKIP = (process.env.SKIP_OBJECTS ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+// The 06:00 run (2026-11-28): the Worker dispatches it with nightly=true. A manual Sync now is a workflow_dispatch as well, so the event
+// name cannot tell them apart. Local runs (no GitHub Actions) count as nightly, as before.
+const NIGHTLY = process.env.NIGHTLY_RUN === 'true' || !process.env.GITHUB_ACTIONS;
 const wanted = (name: string) => (!ONLY.length || ONLY.includes(name)) && !SKIP.includes(name);
 
 // Supabase: the session pooler (5432) allows only 15 clients on the free plan and Hyperdrive keeps most of
@@ -619,7 +623,7 @@ async function refreshViews(): Promise<void> {
   // pages (random order made every Overview statement read ~150 MB). REFRESH CONCURRENTLY changes rows in place and the order decays, so
   // the nightly run rewrites them with CLUSTER (exclusive lock while it runs, so a manual daytime "Sync now" skips it). The VACUUM below
   // then rebuilds their visibility maps.
-  if (process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch') {
+  if (NIGHTLY) {
     for (const [view, index] of [['analytics.mv_touch_flat', 'mv_touch_flat_date'], ['analytics.mv_lead_lite', 'mv_lead_lite_created_inc']] as const) {
       const t1 = Date.now();
       await sql.begin(async (tx) => {
@@ -648,7 +652,7 @@ async function refreshViews(): Promise<void> {
 // the database passes COMPACT_ABOVE_MB (default 3000; the Pro plan holds 8 GB) so usage never creeps up to the quota.
 // VACUUM FULL holds exclusive locks (~25 s in which every dashboard query waits), so a manual daytime "Sync now" never compacts.
 async function compactIfNeeded(): Promise<void> {
-  if (process.env.GITHUB_EVENT_NAME === 'workflow_dispatch') { console.log('[compact] skipped on a manual run'); return; }
+  if (!NIGHTLY) { console.log('[compact] skipped on a manual run'); return; }
   const limit = Number(process.env.COMPACT_ABOVE_MB ?? 3000);
   const [{ mb }] = await sql<{ mb: number }[]>`SELECT round(pg_database_size(current_database())/1048576.0)::int AS mb`;
   console.log(`[compact] database size ${mb} MB (threshold ${limit} MB)`);
@@ -687,6 +691,11 @@ async function main(): Promise<void> {
       await syncCallSummary(s);
     }
     await syncAppTables();
+    // Callyzer call log, Sales staff only (sql/059, 2026-11-28); a failure here is logged and does not stop the refresh
+    if (wanted('callyzer')) {
+      try { const r = await syncCallyzer(sql); await setState('callyzer', new Date(), r.calls, null); }
+      catch (e) { const m = e instanceof Error ? e.message : String(e); console.log(`[callyzer] failed: ${m}`); await setState('callyzer', null, 0, m.slice(0, 500)).catch(() => undefined); }
+    }
     await cleanup();
   }
   if (REFRESH_ONLY || REFRESH_AFTER) await refreshViews();

@@ -8,7 +8,8 @@
     "sync": "tsx src/sync.ts",
     "sync:full": "tsx src/sync.ts --full",
     "refresh": "tsx src/sync.ts --refresh-only",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "callyzer": "tsx src/callyzer-run.ts"
   },
   "dependencies": {
     "postgres": "^3.4.5"
