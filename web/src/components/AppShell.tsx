@@ -9,6 +9,9 @@ import { UserMenu } from './UserMenu';
 import { SyncButton } from './SyncButton';
 import { useUpdating } from '../lib/api';
 
+/** draft pages (sample data) show on the preview site and locally only, never on the live site */
+export const DRAFT_PAGES = typeof location !== 'undefined' && (location.hostname.startsWith('lead-source-') || location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+
 export const NAV = [
   { to: '/', label: 'Overview', icon: <Icon.Home /> },
   { to: '/converted', label: 'Converted', icon: <Icon.Spark /> },
@@ -21,7 +24,9 @@ export function AppShell() {
   const { data: meta, error } = useMeta();
   const { dark, toggle } = useTheme();
   const { user } = useAuth();
-  const base = canExplore(user?.role) ? NAV : NAV.filter((n) => n.to !== '/leads');
+  // Lead Call Analytics is sample data until Callyzer is connected: only on the preview (2026-11-28)
+  const all = DRAFT_PAGES ? NAV : NAV.filter((n) => n.to !== '/calls');
+  const base = canExplore(user?.role) ? all : all.filter((n) => n.to !== '/leads');
   const nav = user?.role === 'admin' ? [...base, { to: '/access', label: 'Access', icon: <Icon.Users /> }] : base;
   const asOf = meta?.dataAsOf;
   // one sync a day (06:00 IST, 2026-11-25): data up to a day old is normal; amber only when the daily refresh was missed

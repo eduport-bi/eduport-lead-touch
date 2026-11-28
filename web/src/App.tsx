@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
-import { AppShell } from './components/AppShell';
+import { AppShell, DRAFT_PAGES } from './components/AppShell';
 import { Skeleton } from './components/ui';
 import { useAuth, canExplore } from './lib/auth';
 
@@ -25,7 +25,8 @@ export default function App() {
       <Route element={<AppShell />}>
         <Route index element={<Suspense fallback={<Fallback />}><Overview /></Suspense>} />
         <Route path="converted" element={<Suspense fallback={<Fallback />}><Converted /></Suspense>} />
-        <Route path="calls" element={<Suspense fallback={<Fallback />}><Calls /></Suspense>} />
+        {/* draft, sample data: the live site sends /calls to Overview */}
+        <Route path="calls" element={DRAFT_PAGES ? <Suspense fallback={<Fallback />}><Calls /></Suspense> : <Navigate to="/" replace />} />
         <Route path="analysis" element={<Suspense fallback={<Fallback />}><Analysis /></Suspense>} />
         <Route path="leads" element={<ExplorerRoute><Suspense fallback={<Fallback />}><LeadExplorer /></Suspense></ExplorerRoute>} />
         <Route path="access" element={<Suspense fallback={<Fallback />}><Access /></Suspense>} />
