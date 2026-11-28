@@ -12,6 +12,7 @@ import { useUpdating } from '../lib/api';
 export const NAV = [
   { to: '/', label: 'Overview', icon: <Icon.Home /> },
   { to: '/converted', label: 'Converted', icon: <Icon.Spark /> },
+  { to: '/calls', label: 'Lead Call Analytics', icon: <Icon.Touch /> },   // DRAFT, sample data
   { to: '/analysis', label: 'Analysis', icon: <Icon.Table /> },
   { to: '/leads', label: 'Lead Explorer', icon: <Icon.Users /> },
 ];
@@ -96,7 +97,7 @@ export function AppShell() {
           </div>
         </header>
         <main className="flex-1 px-6 pb-10 pt-4">
-          {!noFilters && <FilterBar mode={path.startsWith('/converted') ? 'payment' : undefined} />}
+          {!noFilters && <FilterBar mode={path.startsWith('/converted') ? 'payment' : path.startsWith('/calls') ? 'calls' : undefined} />}
           <ErrorBoundary label="page"><Outlet /></ErrorBoundary>
         </main>
       </div>

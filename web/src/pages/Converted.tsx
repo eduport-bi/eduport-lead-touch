@@ -61,7 +61,7 @@ function ConvCard({ title, rows, tone, opts, cols, loading, error, onRetry, help
   const filtered = s ? all.filter((r) => r.key.toLowerCase().includes(s)) : all;
   const data = filtered.slice(0, opts.limit ?? 14);
   return (
-    <ChartCard title={title} tone={tone} subtitle={rows ? `${fmtInt(filtered.reduce((x, r) => x + r.users, 0))} users${s ? ` in ${filtered.length} matching rows` : ''} · ${opts.filterDim || opts.pick ? `click rows to filter every card (multi-select)${selected.length ? ` · ${selected.length} selected` : ''}` : 'click a row for the users'}` : undefined}
+    <ChartCard isTable={opts.asTable} title={title} tone={tone} subtitle={rows ? `${fmtInt(filtered.reduce((x, r) => x + r.users, 0))} users${s ? ` in ${filtered.length} matching rows` : ''} · ${opts.filterDim || opts.pick ? `click rows to filter every card (multi-select)${selected.length ? ` · ${selected.length} selected` : ''}` : 'click a row for the users'}` : undefined}
       loading={loading} error={error} onRetry={onRetry} rows={filtered} columns={cols} height={opts.asTable ? opts.height ?? 280 : Math.max(opts.height ?? 280, data.length * 24 + 16)} help={help}
       titleAddon={control} fileName={fileName}
       actions={<div className="flex items-center gap-2"><CardSearch value={search} onChange={setSearch} count={filtered.length} onApply={onApply ? () => onApply(filtered.map((r) => r.key)) : undefined} /></div>}>

@@ -12,6 +12,7 @@ function ExplorerRoute({ children }: { children: React.ReactNode }) {
 
 const Overview = lazy(() => import('./pages/Overview'));
 const Converted = lazy(() => import('./pages/Converted'));
+const Calls = lazy(() => import('./pages/Calls'));   // DRAFT, sample data
 const Analysis = lazy(() => import('./pages/Analysis'));
 const LeadExplorer = lazy(() => import('./pages/LeadExplorer'));
 const Access = lazy(() => import('./pages/Access'));
@@ -24,6 +25,7 @@ export default function App() {
       <Route element={<AppShell />}>
         <Route index element={<Suspense fallback={<Fallback />}><Overview /></Suspense>} />
         <Route path="converted" element={<Suspense fallback={<Fallback />}><Converted /></Suspense>} />
+        <Route path="calls" element={<Suspense fallback={<Fallback />}><Calls /></Suspense>} />
         <Route path="analysis" element={<Suspense fallback={<Fallback />}><Analysis /></Suspense>} />
         <Route path="leads" element={<ExplorerRoute><Suspense fallback={<Fallback />}><LeadExplorer /></Suspense></ExplorerRoute>} />
         <Route path="access" element={<Suspense fallback={<Fallback />}><Access /></Suspense>} />

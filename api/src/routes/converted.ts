@@ -185,12 +185,35 @@ converted.get('/converted', (c) =>
       WHERE ${wx('source')} AND m.last_touch_source = 'App Installed'
       GROUP BY 1 ORDER BY users DESC LIMIT 2000`;
     // lead class vs purchased class: one row per (user, lead base class, bought base class) for the payments inside the window
+    // Speed (2026-11-28): the class of a batch is worked out once per batch bought in the window (a few hundred) instead of once per
+    // payment (~7k regex-heavy purchase_class calls, ~1 s), and the grid and the mismatch tile read these rows from ONE statement
+    // (they were two statements building the same rows, ~3 s each). Same values as BOUGHT_CLASS / MISMATCH / NO_STREAM_COVERED: a payment
+    // without a batch is purchase_class(NULL, NULL), Ujra bookings are Integrated.
+    const yl = sql`y.lead_class`, yb = sql`y.bought_class`;
     const mixRows = sql`
-      SELECT DISTINCT m.user_id, ${LEAD_CLASS(sql)} AS lead_class, ${BOUGHT_CLASS(sql)} AS bought_class, (${MISMATCH(sql)}) AS mismatch, (${NO_STREAM_COVERED(sql)}) AS no_stream
-      FROM analytics.mv_payer m JOIN analytics.v_payment_all hp ON hp.user_id = m.user_id LEFT JOIN app.core_batch b ON b.id = COALESCE(hp.enrollment_batch_id, hp.batch_id)
-      WHERE ${w} AND ${V} AND ${R} AND hp.payment_date BETWEEN ${p.from} AND ${p.to}`;
-    const [[k], [pk], byStage, byPoint, bySource, byMedium, byCampaign, byStaff, byCourse, byGrade, daily, grades, tatRows, firstRows, appPrevRows, classMix, [classKpi]] = await timedAll(
-      ['kpis', 'payments', 'stage', 'touch_point', 'source', 'medium', 'campaign', 'staff', 'course', 'grade', 'daily', 'grades', 'tat', 'first_touch', 'app_prev', 'class_mix', 'class_kpi'], [
+      WITH pay AS (
+        SELECT m.user_id, ${LEAD_CLASS(sql)} AS lead_class, hp.source, b.id AS bid
+        FROM analytics.mv_payer m JOIN analytics.v_payment_all hp ON hp.user_id = m.user_id LEFT JOIN app.core_batch b ON b.id = COALESCE(hp.enrollment_batch_id, hp.batch_id)
+        WHERE ${w} AND ${V} AND ${R} AND hp.payment_date BETWEEN ${p.from} AND ${p.to}),
+      bc AS MATERIALIZED (SELECT b.id, analytics.purchase_class(b.grade_title, b.course_title) AS pc FROM app.core_batch b WHERE b.id IN (SELECT bid FROM pay)),
+      y AS (SELECT DISTINCT pay.user_id, pay.lead_class,
+                   CASE WHEN pay.source = 'ujra' THEN 'Integrated' ELSE COALESCE(bc.pc, analytics.purchase_class(NULL, NULL)) END AS bought_class
+            FROM pay LEFT JOIN bc ON bc.id = pay.bid)
+      SELECT y.user_id, y.lead_class, y.bought_class,
+             (${yl} NOT IN ('Unknown', 'No Salesforce Lead') AND ${yb} <> 'Integrated' AND NOT ${sameClass(sql, yl, yb)}) AS mismatch,
+             (${yb} <> 'Integrated' AND ${noStreamCovered(sql, yl, yb)}) AS no_stream
+      FROM y`;
+    const mixAll = sql<{ kind: string; lead_class: string; bought_class: string; users: number; mismatch_users: number; with_class_users: number; no_class_users: number; no_stream_users: number }[]>`
+      WITH x AS MATERIALIZED (${mixRows})
+      SELECT 'mix' AS kind, lead_class, bought_class, count(DISTINCT user_id)::int AS users, 0 AS mismatch_users, 0 AS with_class_users, 0 AS no_class_users, 0 AS no_stream_users
+      FROM x GROUP BY 2, 3
+      UNION ALL
+      SELECT 'kpi', NULL, NULL, 0,
+             count(DISTINCT user_id) FILTER (WHERE mismatch)::int, count(DISTINCT user_id) FILTER (WHERE lead_class NOT IN ('Unknown', 'No Salesforce Lead'))::int,
+             count(DISTINCT user_id) FILTER (WHERE lead_class = 'Unknown')::int, count(DISTINCT user_id) FILTER (WHERE no_stream AND NOT mismatch)::int
+      FROM x`;
+    const [[k], [pk], byStage, byPoint, bySource, byMedium, byCampaign, byStaff, byCourse, byGrade, daily, grades, tatRows, firstRows, appPrevRows, mixAllRows] = await timedAll(
+      ['kpis', 'payments', 'stage', 'touch_point', 'source', 'medium', 'campaign', 'staff', 'course', 'grade', 'daily', 'grades', 'tat', 'first_touch', 'app_prev', 'class_mix'], [
       sql<{ users: number; new_users: number; no_touch: number; no_lead: number; revenue: number; touches: number }[]>`
         SELECT count(*)::int AS users, count(*) FILTER (WHERE ${pm === 'm0' ? sql`m.first_payment_date_m0` : sql`m.first_payment_date`} BETWEEN ${p.from} AND ${p.to})::int AS new_users,
                count(*) FILTER (WHERE m.last_touch_id IS NULL)::int AS no_touch, count(*) FILTER (WHERE m.no_lead)::int AS no_lead,
@@ -237,17 +260,11 @@ converted.get('/converted', (c) =>
         SELECT kind, ${tatBucket(sql, sql`days`)} AS key, count(*)::int AS leads, NULL::float8 AS avg_days, NULL::float8 AS median_days FROM d GROUP BY 1, 2
         UNION ALL
         SELECT kind, '_all', count(*)::int, avg(days)::float8, percentile_cont(0.5) WITHIN GROUP (ORDER BY days)::float8 FROM d GROUP BY 1`,
-      firstP, appPrevP,
-      sql<{ lead_class: string; bought_class: string; users: number }[]>`
-        WITH x AS (${mixRows}) SELECT lead_class, bought_class, count(DISTINCT user_id)::int AS users FROM x GROUP BY 1, 2`,
-      sql<{ mismatch_users: number; with_class_users: number; no_class_users: number; no_stream_users: number }[]>`
-        WITH x AS (${mixRows})
-        SELECT count(DISTINCT user_id) FILTER (WHERE mismatch)::int AS mismatch_users,
-               count(DISTINCT user_id) FILTER (WHERE lead_class NOT IN ('Unknown', 'No Salesforce Lead'))::int AS with_class_users,
-               count(DISTINCT user_id) FILTER (WHERE lead_class = 'Unknown')::int AS no_class_users,
-               count(DISTINCT user_id) FILTER (WHERE no_stream AND NOT mismatch)::int AS no_stream_users
-        FROM x`,
+      firstP, appPrevP, mixAll,
     ]);
+    const classMix = mixAllRows.filter((r) => r.kind === 'mix').map(({ lead_class, bought_class, users }) => ({ lead_class, bought_class, users }));
+    const { mismatch_users, with_class_users, no_class_users, no_stream_users } = mixAllRows.find((r) => r.kind === 'kpi') ?? { mismatch_users: 0, with_class_users: 0, no_class_users: 0, no_stream_users: 0 };
+    const classKpi = { mismatch_users, with_class_users, no_class_users, no_stream_users };
     const appPrevTot = appPrevRows.reduce((s, r) => s + r.users, 0);
     const byAppPrev: PayerDim[] = appPrevRows.map((r) => ({ ...r, share_pct: pct(r.users, appPrevTot) }));
     const byFirst = (dim: (typeof FIRST_DIMS)[number]): PayerDim[] => {

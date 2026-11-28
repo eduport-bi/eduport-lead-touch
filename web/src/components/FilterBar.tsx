@@ -1,3 +1,4 @@
+import { setCallFilters, useCallFilters } from '../lib/callFilters';
 import { titleCase } from '../lib/format';
 import { useState, type MouseEvent, type ReactNode } from 'react';
 import { DIM_LABEL, FILTER_MENU, PRESETS, useFilters, type Basis, type ListDim } from '../lib/filters';
@@ -43,8 +44,9 @@ function Seg<T extends string>({ value, onChange, options, stretch }: { value: T
 }
 const valueText = (v: string[]) => (v.length === 0 ? 'All' : v.length <= 2 ? v.join(', ') : `${v.length} selected`);
 
-export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
+export function FilterBar({ mode }: { mode?: 'payment' | 'calls' } = {}) {
   const { f, set, setList, clearAll, activeCount } = useFilters();
+  const cf = useCallFilters();
   const [openDim, setOpenDim] = useState<ListDim | null>(null);
 
   const chips: { label: string; onRemove: () => void }[] = [];
@@ -103,8 +105,12 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
             {/* what the dates are (Created / Touch) sits inside the Dates box, spaced like the dates */}
             <Popover width="w-[400px]" block trigger={rangeTrigger(f.from, f.to, 'Change the dates', mode === 'payment' ? undefined : <>
               <span className="h-5 w-px shrink-0 bg-line" />
-              <Seg<Basis> value={f.basis} onChange={(basis) => set({ basis })}
-                options={[{ value: 'created', label: 'Created', title: 'Dates are the lead created date: leads created in the range (with all their touches)' }, { value: 'touch', label: 'Touch', title: 'Dates are the touch date: touches dated in the range' }]} />
+              {mode === 'calls'
+                // Lead Call Analytics (2026-11-28): a third basis, the call date = every call dated in the range
+                ? <Seg<Basis | 'call'> value={cf.basis === 'call' ? 'call' : f.basis} onChange={(b) => { if (b === 'call') setCallFilters({ basis: 'call' }); else { setCallFilters({ basis: 'lead' }); set({ basis: b }); } }}
+                    options={[{ value: 'created', label: 'Created', title: 'Leads created in the range, with their calls since creation' }, { value: 'touch', label: 'Touch', title: 'Leads touched in the range, with their calls since the touch' }, { value: 'call', label: 'Call', title: 'Every call dated in the range, whatever the lead' }]} />
+                : <Seg<Basis> value={f.basis} onChange={(basis) => set({ basis })}
+                options={[{ value: 'created', label: 'Created', title: 'Dates are the lead created date: leads created in the range (with all their touches)' }, { value: 'touch', label: 'Touch', title: 'Dates are the touch date: touches dated in the range' }]} />}
             </>)}>
               {(close) => (
                 <div className="space-y-3 text-xs">
@@ -122,7 +128,7 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
             </Popover>
             </div>
           </Cell>
-          {mode !== 'payment' && <>
+          {mode !== 'payment' && mode !== 'calls' && <>
             {/* the on/off switch sits in the label line; when on, the value is the range, which opens the two dates */}
             <Cell active={f.pay} title="When on, Converted counts only valid payments dated inside this second window"
               label={<span className="flex w-full items-center justify-between">Payment date<Toggle checked={f.pay} onChange={(pay) => set({ pay })} label="" /></span>}>
@@ -133,7 +139,32 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
               ) : <span className="text-ink-3">Off</span>}
             </Cell>
           </>}
-          {mode === 'payment' ? picker(quick[0]!) : (() => {
+          {mode === 'calls' && <>
+            {picker(quick[0]!)}
+            {/* call filters (2026-11-28): which leads count (called or not) and which calls count */}
+            <Cell label="Calls by" active={cf.by !== 'all'}>
+              <Seg value={cf.by} onChange={(by) => setCallFilters({ by })} stretch options={[
+                { value: 'all', label: 'Anyone', title: 'a call by any Callyzer user counts' }, { value: 'owner', label: 'Lead owner', title: 'only calls made by the owner of the lead' },
+              ]} />
+            </Cell>
+            {cf.basis !== 'call' && <Cell label="Leads" active={cf.called !== 'all'}>
+              <Seg value={cf.called} onChange={(called) => setCallFilters({ called })} stretch options={[
+                { value: 'all', label: 'All' }, { value: 'called', label: 'Called', title: 'leads with at least one call after the touch or creation' },
+                { value: 'not_called', label: 'Not called', title: 'leads with no call after the touch or creation' }, { value: 'connected', label: 'Connected', title: 'leads with a connected call' },
+              ]} />
+            </Cell>}
+            <Cell label="Call type" active={cf.callType !== 'all'}>
+              <Seg value={cf.callType} onChange={(callType) => setCallFilters({ callType })} stretch options={[
+                { value: 'all', label: 'All' }, { value: 'outgoing', label: 'Outgoing' }, { value: 'incoming', label: 'Incoming' }, { value: 'missed', label: 'Missed' },
+              ]} />
+            </Cell>
+            <Cell label="Talk time" active={cf.minTalk !== '0'}>
+              <Seg value={cf.minTalk} onChange={(minTalk) => setCallFilters({ minTalk })} stretch options={[
+                { value: '0', label: 'Any' }, { value: '30', label: '30 s+' }, { value: '120', label: '2 min+' },
+              ]} />
+            </Cell>
+          </>}
+          {mode === 'calls' ? null : mode === 'payment' ? picker(quick[0]!) : (() => {
             // ONE Class card (2026-11-26): the class picker, what the class means (lead / purchased) and the match tick box, side by side
             const v = f.lists.class_group ?? [];
             return (
@@ -165,8 +196,10 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
           {quick.slice(1).map(picker)}
           {/* named filter views (2026-11-26): Views opens / manages them, Save names the current filters as a new view. The single saved
               "Default" filter set was removed at the user's request. */}
+          {mode !== 'calls' && <>
           <Cell label="Views"><FilterViews cell /></Cell>
           <Cell label="Save"><SaveView /></Cell>
+          </>}
         </div>
         </div>
         {/* right edge (user, 2026-11-26): + adds a filter, ✕ removes them all. Stacked, each half of the pane's height. */}
@@ -212,7 +245,12 @@ export function FilterBar({ mode }: { mode?: 'payment' } = {}) {
       )}
 
       {/* touch-date basis (user, 2026-11-27): say what Total leads holds, or "more leads than touches" looks wrong */}
-      {mode !== 'payment' && f.basis !== 'created' && (
+      {mode === 'calls' && cf.basis === 'call' && (
+        <div className="mt-1.5 px-1 text-[11px] text-ink-3">
+          Call date basis: every call dated in these dates, matched to its lead by phone number. Class, source and the other lead filters use the lead's current values.
+        </div>
+      )}
+      {mode !== 'payment' && !(mode === 'calls' && cf.basis === 'call') && f.basis !== 'created' && (
         <div className="mt-1.5 px-1 text-[11px] text-ink-3">
           Touch date basis: leads = leads created in these dates + older leads touched in them. Leads created here with no touch yet are included, so leads can be more than touches.
         </div>

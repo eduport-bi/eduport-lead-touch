@@ -4,7 +4,7 @@ import type { AppEnv, Env } from './env';
 import { authMiddleware, INTERNAL_HEADER, INTERNAL_ROLE_HEADER, INTERNAL_TOKEN } from './auth';
 import { forgetVersion, memStats } from './cache';
 import { getSql, withSql } from './db';
-import { savedQueryToApi } from './saved_filter';
+import { presetRange, savedQueryToApi } from './saved_filter';
 import { meta } from './routes/meta';
 import { filters } from './routes/filters';
 import { leads } from './routes/leads';
@@ -25,7 +25,12 @@ app.get('/api/health', (c) => c.json({ ok: true, version: c.env.APP_VERSION ?? '
 app.use('/api/*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');
   c.header('Referrer-Policy', 'same-origin');
+  // diagnosis only (preview with --var SEQ_TIMING:1): run each fan-out one statement at a time and log every statement's own duration
+  const g = globalThis as { __seqTiming?: boolean; __seqLog?: unknown[] };
+  g.__seqTiming = (c.env as { SEQ_TIMING?: string }).SEQ_TIMING === '1';
+  if (g.__seqTiming) g.__seqLog = [];
   await next();
+  if (g.__seqTiming && g.__seqLog?.length) c.header('X-Seq-Timing', JSON.stringify(g.__seqLog));
 });
 app.use('/api/*', authMiddleware);
 
@@ -108,6 +113,17 @@ export function warmUrls(): string[] {
     `/api/overview?${base('touch')}&part=top&yet_days=5`, `/api/overview?${base('touch')}&part=rest`,
     `/api/converted?${base('touch')}&pm=all`,
   ];
+  // the other short presets (2026-11-28): an uncached view costs 5-12 s on the Micro database, and answers stay cached until the next
+  // sync, so the first visitor of the day no longer pays for Yesterday / Last 7 / Last 90 days / This month / Last month. Last 30 days
+  // (above) first. This financial year is left out: one view costs tens of seconds.
+  const today = ymd(nowIst);
+  for (const preset of ['7d', 'yesterday', 'mtd', 'lastm', '90d']) {
+    const [pf, pt] = presetRange(preset, today);
+    for (const basis of ['created', 'touch'] as const) {
+      const b = `from=${pf}&to=${pt}&basis=${basis}&compare=none`;
+      urls.push(`/api/overview?${b}&part=top&yet_days=5`, `/api/overview?${b}&part=rest`, `/api/converted?${b}&pm=all`);
+    }
+  }
   return urls;
 }
 

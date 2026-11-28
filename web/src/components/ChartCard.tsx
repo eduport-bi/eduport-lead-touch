@@ -17,6 +17,8 @@ export interface ChartCardProps<Row extends object> {
   error?: unknown;
   onRetry?: () => void;
   rows?: Row[];                       // for CSV + table view
+  /** the card already shows a table: no chart / table switch */
+  isTable?: boolean;
   columns?: Col<Row>[];               // table view columns (defaults to all keys)
   empty?: boolean;
   emptyHint?: string;
@@ -92,7 +94,7 @@ export function ChartCard<Row extends object>(p: ChartCardProps<Row>) {
         </div>
         <div className="flex items-center gap-1">
           {p.actions}
-          {p.rows && (
+          {p.rows && !p.isTable && (
             <button className={`btn !px-1.5 ${table ? 'border-accent text-accent' : ''}`} title={table ? 'Show chart' : 'Show table'} onClick={() => setTable((t) => !t)}>
               {table ? <Icon.Chart /> : <Icon.Table />}
             </button>

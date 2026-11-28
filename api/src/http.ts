@@ -112,22 +112,24 @@ const HEAVY = ['fees', 'conv_ay', 'leads_union', 'ic_course', 'tat', 'stage_reac
  * hit the timeout instead of just "internal error".
  */
 export async function timedAll<T extends readonly unknown[] | []>(names: readonly string[], qs: T, limit = FANOUT_LIMIT): Promise<{ -readonly [P in keyof T]: Awaited<T[P]> }> {
-  const t0 = Date.now(); const times: Record<string, number> = {};
+  const seq = (globalThis as { __seqTiming?: boolean }).__seqTiming === true; if (seq) limit = 1;
+  const t0 = Date.now(); const times: Record<string, number> = {}; const own: Record<string, number> = {};
   const rank = (i: number) => { const k = HEAVY.indexOf(names[i] ?? ''); return k < 0 ? HEAVY.length : k; };
   const order = (qs as readonly unknown[]).map((_, i) => i).sort((a, b) => rank(a) - rank(b));
   const settled: PromiseSettledResult<unknown>[] = new Array(qs.length);
   let next = 0;
   const worker = async () => {
     while (next < order.length) {
-      const i = order[next++]!;
+      const i = order[next++]!; const s0 = Date.now();
       let timer: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(Object.assign(new Error(`The statement "${names[i] ?? i}" did not answer within ${STATEMENT_TIMEOUT_MS / 1000} s; please retry`), { status: 504 })), STATEMENT_TIMEOUT_MS); });
       try { settled[i] = { status: 'fulfilled', value: await Promise.race([(qs as readonly unknown[])[i], deadline]) }; }
       catch (e) { settled[i] = { status: 'rejected', reason: e }; }
-      finally { if (timer !== undefined) clearTimeout(timer); times[names[i] ?? String(i)] = Date.now() - t0; }
+      finally { if (timer !== undefined) clearTimeout(timer); times[names[i] ?? String(i)] = Date.now() - t0; own[names[i] ?? String(i)] = Date.now() - s0; }
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, order.length)) }, worker));
+  if (seq) { const g = globalThis as { __seqLog?: unknown[] }; (g.__seqLog ??= []).push({ total: Date.now() - t0, ...Object.fromEntries(Object.entries(own).sort((x, y) => y[1] - x[1])) }); }
   // one line per fan-out whenever it was slow (any statement over 2 s): every duration, slowest first, so the Worker log shows where the time went
   if (Object.values(times).some((ms) => ms > 2000)) console.log('slow queries', JSON.stringify(Object.fromEntries(Object.entries(times).sort((x, y) => y[1] - x[1]))));
   const failed = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');

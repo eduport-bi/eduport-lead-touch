@@ -67,7 +67,7 @@ function DimCard({ title, rows, dim, measures, tone, opts, loading, error, onRet
   const [m1, m2] = measures;
   const cols = ALL_COLS;
   return (
-    <ChartCard title={title} tone={tone} subtitle={opts.subtitle ?? (rows ? `${fmtInt(filtered.reduce((x, r) => x + r[m1], 0))} ${MEASURE_LABEL[m1].toLowerCase()}${s ? ` in ${filtered.length} matching rows` : ''}${selected.length ? ` · ${selected.length} selected` : ''} · click rows to filter the other cards (multi-select)` : undefined)}
+    <ChartCard isTable={opts.asTable} title={title} tone={tone} subtitle={opts.subtitle ?? (rows ? `${fmtInt(filtered.reduce((x, r) => x + r[m1], 0))} ${MEASURE_LABEL[m1].toLowerCase()}${s ? ` in ${filtered.length} matching rows` : ''}${selected.length ? ` · ${selected.length} selected` : ''} · click rows to filter the other cards (multi-select)` : undefined)}
       loading={loading} error={error} onRetry={onRetry} rows={filtered} columns={ALL_COLS} height={opts.asTable ? opts.height ?? 250 : Math.max(opts.height ?? 250, data.length * 24 + 16)} className={opts.className}
       actions={<CardSearch value={search} onChange={setSearch} count={filtered.length} onApply={() => setList(dim, filtered.map((r) => r.key))} />}
       help={opts.help ?? `Leads by ${title.toLowerCase()}. ${def.dim_converted ?? ''}`}>
